@@ -149,13 +149,13 @@ Create GitHub Release --> Publish npm Package
 **Needs:** `integration-tests`  
 **When:** Only on tag pushes (`v*`)  
 **Permissions:** `contents: write`, `packages: write`  
-**Purpose:** Create GitHub release and publish npm package
+**Purpose:** Create or update GitHub release and publish npm package
 
 **Steps:**
 1. Checkout code with full history
 2. Set up Go 1.23
 3. Download binaries artifact
-4. Create GitHub release with all three binaries
+4. Create or update GitHub release with all three binaries (handles auto-created drafts)
 5. Set up Node.js for npm publishing
 6. Create npm package structure:
    - Copy binaries to `npm-package/bin/`
