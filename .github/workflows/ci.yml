@@ -166,6 +166,20 @@ jobs:
           echo "Verifying binaries exist..."
           ls -la dist/
           
+          # Create release notes file
+          cat > release_notes.md <<EOF
+          ## Release $TAG
+          
+          OpenAPI mock server release.
+          
+          **Binaries included:**
+          - oasmock-linux-amd64 (Linux x86_64)
+          - oasmock-darwin-amd64 (macOS x86_64)
+          - oasmock-windows-amd64.exe (Windows x86_64)
+          
+          See https://github.com/mamonth/oasmock for documentation.
+          EOF
+          
           # Check if release already exists (auto-created draft)
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists, uploading assets..."
@@ -178,14 +192,14 @@ jobs:
             # Update release info and publish if draft
             gh release edit "$TAG" \
               --title "$TAG" \
-              --notes "Release $TAG - OpenAPI mock server" \
+              --notes-file release_notes.md \
               --draft=false
           else
             echo "Creating new release $TAG..."
             # Create release with binaries
             gh release create "$TAG" \
               --title "$TAG" \
-              --notes "Release $TAG - OpenAPI mock server" \
+              --notes-file release_notes.md \
               dist/oasmock-linux-amd64 \
               dist/oasmock-darwin-amd64 \
               dist/oasmock-windows-amd64.exe
