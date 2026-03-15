@@ -159,6 +159,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           TAG=${GITHUB_REF#refs/tags/}
           
           # Verify binaries exist
