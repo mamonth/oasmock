@@ -155,17 +155,40 @@ jobs:
           name: oasmock-binaries
           path: dist/
       
-      - name: Create GitHub release
+      - name: Create or update GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG=${GITHUB_REF#refs/tags/}
-          gh release create $TAG \
-            --title "$TAG" \
-            --notes-file <(echo "Release $TAG - OpenAPI mock server") \
-            dist/oasmock-linux-amd64 \
-            dist/oasmock-darwin-amd64 \
-            dist/oasmock-windows-amd64.exe
+          
+          # Verify binaries exist
+          echo "Verifying binaries exist..."
+          ls -la dist/
+          
+          # Check if release already exists (auto-created draft)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, uploading assets..."
+            # Upload binaries to existing release
+            gh release upload "$TAG" \
+              dist/oasmock-linux-amd64 \
+              dist/oasmock-darwin-amd64 \
+              dist/oasmock-windows-amd64.exe \
+              --clobber
+            # Update release info and publish if draft
+            gh release edit "$TAG" \
+              --title "$TAG" \
+              --notes "Release $TAG - OpenAPI mock server" \
+              --draft=false
+          else
+            echo "Creating new release $TAG..."
+            # Create release with binaries
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "Release $TAG - OpenAPI mock server" \
+              dist/oasmock-linux-amd64 \
+              dist/oasmock-darwin-amd64 \
+              dist/oasmock-windows-amd64.exe
+          fi
       
       - name: Set up Node.js for npm publish
         uses: actions/setup-node@v4
