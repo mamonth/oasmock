@@ -1,0 +1,27 @@
+openapi: 3.0.3
+info:
+  title: Test Params Match API
+  version: 1.0.0
+paths:
+  /search:
+    get:
+      parameters:
+        - name: id
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              examples:
+                exactMatch:
+                  x-mock-params-match:
+                    '{$request.query.id}': 12
+                  value:
+                    message: "matched id=12"
+                default:
+                  value:
+                    message: "default response"

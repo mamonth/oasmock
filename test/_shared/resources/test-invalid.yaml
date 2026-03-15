@@ -1,0 +1,12 @@
+invalid: yaml: content
+  with bad indentation
+and: [unclosed array
+openapi: 3.0.3
+info:
+  title: Invalid API
+paths:
+  /test:
+    get:
+      responses:
+        '200':
+          description: OK

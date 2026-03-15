@@ -1,0 +1,77 @@
+openapi: 3.0.3
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /users:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    - id: 1
+                      name: Alice
+                    - id: 2
+                      name: Bob
+  /users/{id}:
+    get:
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    id: 1
+                    name: Alice
+  /conditional:
+    get:
+      responses:
+        '200':
+          description: OK
+  /once:
+    get:
+      responses:
+        '200':
+          description: OK
+  /not-in-schema:
+    get:
+      responses:
+        '200':
+          description: OK
+  /structured:
+    get:
+      responses:
+        '200':
+          description: OK
+  /echo:
+    post:
+      responses:
+        '200':
+          description: OK
+  /body:
+    post:
+      responses:
+        '200':
+          description: OK
+  /env:
+    get:
+      responses:
+        '200':
+          description: OK
+  /jwt:
+    get:
+      responses:
+        '200':
+          description: OK

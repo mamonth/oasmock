@@ -1,0 +1,20 @@
+openapi: 3.0.3
+info:
+  title: Test Once API
+  version: 1.0.0
+paths:
+  /once:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              examples:
+                first:
+                  x-mock-once: true
+                  value:
+                    message: "first (once)"
+                second:
+                  value:
+                    message: "second (default)"

@@ -1,0 +1,42 @@
+openapi: 3.0.3
+info:
+  title: Test Extensions API
+  version: 1.0.0
+paths:
+  /state:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              examples:
+                setStateExample:
+                  x-mock-set-state:
+                    counter: { increment: 1 }
+                  value:
+                    message: "counter incremented"
+  /headers:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              examples:
+                headersExample:
+                  x-mock-headers:
+                    X-Custom-Header: "custom-value"
+                  value:
+                    message: "headers added"
+  /read:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              examples:
+                readStateExample:
+                  value:
+                    counter: "{$state.counter}"

@@ -1,0 +1,17 @@
+schema: spec-driven
+
+context: |
+  project specific tech context and conventions described at ../docs/project.md
+  CLI interdace described at ../docs/cli.md
+  OpenAPI extensions described at ../docs/extensions.md
+  Management API over HTTP described at ../api/openapi.yaml
+
+rules:
+  specs:
+    - |
+      Mark every scenario with project wide unique code: RS.[SPECS_SHORT_CODE].[SPEC_NUMBER]
+        - RS: for Requirement scenario
+        - SPEC_SHORT_CODE: 3-4 letter code, unique for current spec domain
+        - SPEC_NUMBER: specification number (should be consistenly glued with scenario)
+      For example: `RS.CLI.1` or `RS.MSC.4` or `RS.MAPI.23`
+      Full header example: `Scenario RS.EXT.1: Processing some data`

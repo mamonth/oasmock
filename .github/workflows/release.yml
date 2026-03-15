@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  npm:
+    runs-on: ubuntu-latest
+    needs: goreleaser
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install go-npm
+        run: npm install -g go-npm
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build for npm
+        run: |
+          GOOS=linux GOARCH=amd64 go build -o bin/oasmock-linux-amd64 ./cmd/oasmock
+          GOOS=darwin GOARCH=amd64 go build -o bin/oasmock-darwin-amd64 ./cmd/oasmock
+          GOOS=windows GOARCH=amd64 go build -o bin/oasmock-win-amd64.exe ./cmd/oasmock
+
+      - name: Create package.json for npm
+        run: |
+          cat > package.json <<EOF
+          {
+            "name": "oasmock",
+            "version": "${GITHUB_REF#refs/tags/v}",
+            "description": "OpenAPI mock server with runtime expressions and extensions",
+            "bin": {
+              "oasmock": "./bin/oasmock"
+            },
+            "repository": {
+              "type": "git",
+              "url": "git+https://github.com/mamonth/oasmock.git"
+            },
+            "keywords": ["openapi", "mock", "server", "testing"],
+            "author": "OpenCode",
+            "license": "MIT",
+            "bugs": {
+              "url": "https://github.com/mamonth/oasmock/issues"
+            },
+            "homepage": "https://github.com/mamonth/oasmock#readme",
+            "os": ["darwin", "linux", "win32"],
+            "cpu": ["x64"]
+          }
+          EOF
+
+      - name: Create npm install script
+        run: |
+          mkdir -p bin
+          cat > install.js <<EOF
+          const fs = require('fs');
+          const path = require('path');
+          const os = require('os');
+          const process = require('process');
+
+          const platform = os.platform();
+          const arch = os.arch();
+
+          let binaryName;
+          if (platform === 'linux' && arch === 'x64') {
+            binaryName = 'oasmock-linux-amd64';
+          } else if (platform === 'darwin' && arch === 'x64') {
+            binaryName = 'oasmock-darwin-amd64';
+          } else if (platform === 'win32' && arch === 'x64') {
+            binaryName = 'oasmock-win-amd64.exe';
+          } else {
+            console.error('Unsupported platform/arch:', platform, arch);
+            process.exit(1);
+          }
+
+          const source = path.join(__dirname, '..', binaryName);
+          const target = path.join(__dirname, 'oasmock');
+          fs.copyFileSync(source, target);
+          fs.chmodSync(target, '755');
+          EOF
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

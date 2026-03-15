@@ -1,0 +1,180 @@
+openapi: 3.0.0
+info:
+  title: OASMock control HTTP API
+  description: HTTP API for the OpenAPI-based mock tool
+  version: 0.1.0
+servers:
+  - url: http://localhost:19191/_mock
+    description: Default mock server
+paths:
+  /examples:
+    post:
+      operationId: createExample
+      summary: Add a new mock example
+      description: |
+        Adds a custom example to the mock server for a given path and method.
+        The example can be conditional based on request parameters.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddExampleRequest'
+      responses:
+        '200':
+          description: Example added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddExampleResponse'
+        '400':
+          description: Invalid request
+        '500':
+          description: Internal server error
+  /requests:
+    get:
+      summary: Retrieve request history
+      description: |
+        Returns a list of requests that have been processed by the mock server,
+        optionally filtered by path, method, time range, etc.
+      parameters:
+        - name: path
+          in: query
+          description: Filter by request path
+          schema:
+            type: string
+        - name: method
+          in: query
+          description: Filter by HTTP method (GET, POST, etc.)
+          schema:
+            type: string
+            enum: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
+        - name: limit
+          in: query
+          description: Maximum number of records to return (default 100, max 100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 100
+        - name: offset
+          in: query
+          description: Offset for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: time_from
+          in: query
+          description: Filter requests from this timestamp (milliseconds since epoch)
+          schema:
+            type: integer
+        - name: time_till
+          in: query
+          description: Filter requests until this timestamp (milliseconds since epoch)
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Request history retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestHistoryResponse'
+components:
+  schemas:
+    AddExampleRequest:
+      type: object
+      required:
+        - path
+        - response
+      properties:
+        path:
+          type: string
+          description: The request path (including path parameters) to match
+        method:
+          type: string
+          enum: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
+          default: GET
+          description: HTTP method to match
+        once:
+          type: boolean
+          default: false
+          description: If true, the example will be returned only once (when conditions are met)
+        validate:
+          type: boolean
+          default: true
+          description: Validate the example data against the OpenAPI schema for the path
+        conditions:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: number
+              - type: boolean
+              - type: object
+          description: |
+            Conditions to match the request. Keys can be runtime expressions,
+            values can be literal values or JSON schemas for validation.
+        response:
+          $ref: '#/components/schemas/ExampleResponse'
+    ExampleResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: HTTP status code
+          default: 200
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Response headers
+        body:
+          oneOf: 
+            - type: string
+            - type: number
+            - type: boolean
+            - type: object
+            - type: array
+          description: Response body (JSON or text)
+    AddExampleResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        id:
+          type: string
+          description: Unique identifier for the added example
+    RequestHistoryItem:
+      type: object
+      properties:
+        ts:
+          type: integer
+          description: Timestamp in milliseconds since epoch
+        url:
+          type: string
+          description: Full request URL
+        method:
+          type: string
+          description: HTTP method
+        body:
+          oneOf: 
+            - type: string
+            - type: object
+            - type: array
+          description: Request body (parsed if JSON)
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Request headers
+    RequestHistoryResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/RequestHistoryItem'

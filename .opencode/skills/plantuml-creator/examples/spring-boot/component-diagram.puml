@@ -1,0 +1,178 @@
+@startuml spring-boot-components
+!theme cerulean
+
+<style>
+component {
+  BackgroundColor LightBlue
+  BorderColor Navy
+  FontColor DarkBlue
+  FontSize 11
+}
+interface {
+  BackgroundColor LightYellow
+  BorderColor DarkGoldenrod
+}
+package {
+  BackgroundColor WhiteSmoke
+  BorderColor Gray
+  FontStyle bold
+}
+</style>
+
+title 🌱 Spring Boot Application Component Architecture
+
+' Presentation Layer
+package "🎯 Presentation Layer" /'source: @/src/main/java/com/example/controller'/ {
+  [UserController\n@RestController] as UserCtrl /'source: @/src/main/java/com/example/controller/UserController.java:28'/
+  [OrderController\n@RestController] as OrderCtrl /'source: @/src/main/java/com/example/controller/OrderController.java:32'/
+  [ProductController\n@RestController] as ProdCtrl /'source: @/src/main/java/com/example/controller/ProductController.java:25'/
+
+  interface "REST API\n/api/v1/*" as RestAPI /'source: @/src/main/resources/application.yml:server'/
+
+  UserCtrl -up- RestAPI
+  OrderCtrl -up- RestAPI
+  ProdCtrl -up- RestAPI
+}
+
+' Service Layer
+package "💼 Business Logic Layer" /'source: @/src/main/java/com/example/service'/ {
+  [UserService\n@Service] as UserSvc /'source: @/src/main/java/com/example/service/UserService.java:45'/
+  [OrderService\n@Service] as OrderSvc /'source: @/src/main/java/com/example/service/OrderService.java:56'/
+  [ProductService\n@Service] as ProdSvc /'source: @/src/main/java/com/example/service/ProductService.java:38'/
+  [NotificationService\n@Service\n⚡ @Async] as NotifSvc /'source: @/src/main/java/com/example/service/NotificationService.java:67'/
+  [PaymentService\n@Service] as PaymentSvc /'source: @/src/main/java/com/example/service/PaymentService.java:89'/
+}
+
+' Data Access Layer
+package "📦 Data Access Layer" /'source: @/src/main/java/com/example/repository'/ {
+  [UserRepository\n@Repository\nextends JpaRepository] as UserRepo /'source: @/src/main/java/com/example/repository/UserRepository.java:18'/
+  [OrderRepository\n@Repository\nextends JpaRepository] as OrderRepo /'source: @/src/main/java/com/example/repository/OrderRepository.java:23'/
+  [ProductRepository\n@Repository\nextends JpaRepository] as ProdRepo /'source: @/src/main/java/com/example/repository/ProductRepository.java:21'/
+
+  interface "JPA/Hibernate" as JPA /'source: @/src/main/resources/application.yml:spring.jpa'/
+
+  UserRepo -down- JPA
+  OrderRepo -down- JPA
+  ProdRepo -down- JPA
+}
+
+' Configuration and Cross-Cutting
+package "⚙️ Configuration & Infrastructure" /'source: @/src/main/java/com/example/config'/ {
+  [SecurityConfig\n@Configuration\n🔒 JWT Auth] as SecConfig /'source: @/src/main/java/com/example/config/SecurityConfig.java:67'/
+  [CacheConfig\n@Configuration\n⚡ @EnableCaching] as CacheConfig /'source: @/src/main/java/com/example/config/CacheConfig.java:34'/
+  [AsyncConfig\n@Configuration\n⚡ @EnableAsync] as AsyncConfig /'source: @/src/main/java/com/example/config/AsyncConfig.java:28'/
+  [DatabaseConfig\n@Configuration\n💾 DataSource] as DBConfig /'source: @/src/main/java/com/example/config/DatabaseConfig.java:45'/
+  [SwaggerConfig\n@Configuration\n📚 OpenAPI] as SwaggerConfig /'source: @/src/main/java/com/example/config/SwaggerConfig.java:23'/
+}
+
+' External Integrations
+package "🔌 External Integration Layer" /'source: @/src/main/java/com/example/integration'/ {
+  [PaymentGatewayClient\n@FeignClient] as PaymentClient /'source: @/src/main/java/com/example/integration/PaymentGatewayClient.java:56'/
+  [EmailClient\n@Component\nSMTP] as EmailClient /'source: @/src/main/java/com/example/integration/EmailClient.java:34'/
+  [S3StorageClient\n@Component\nAWS SDK] as S3Client /'source: @/src/main/java/com/example/integration/S3StorageClient.java:78'/
+}
+
+' Domain Models
+package "🏗️ Domain Models" /'source: @/src/main/java/com/example/model'/ {
+  [User\n@Entity\n@Table] as UserEntity /'source: @/src/main/java/com/example/model/User.java:45'/
+  [Order\n@Entity\n@Table] as OrderEntity /'source: @/src/main/java/com/example/model/Order.java:67'/
+  [Product\n@Entity\n@Table] as ProdEntity /'source: @/src/main/java/com/example/model/Product.java:38'/
+}
+
+' DTOs
+package "📄 Data Transfer Objects" /'source: @/src/main/java/com/example/dto'/ {
+  [UserDTO\nRecord] as UserDTO /'source: @/src/main/java/com/example/dto/UserDTO.java:23'/
+  [OrderDTO\nRecord] as OrderDTO /'source: @/src/main/java/com/example/dto/OrderDTO.java:34'/
+  [ProductDTO\nRecord] as ProdDTO /'source: @/src/main/java/com/example/dto/ProductDTO.java:28'/
+}
+
+' Database
+database "💾 PostgreSQL" as DB /'source: @/src/main/resources/application.yml:spring.datasource'/
+
+' Cache
+database "⚡ Redis Cache" as Cache /'source: @/src/main/resources/application.yml:spring.redis'/
+
+' Message Queue
+queue "📬 RabbitMQ" as MQ /'source: @/src/main/resources/application.yml:spring.rabbitmq'/
+
+' Relationships - Controller to Service
+UserCtrl --> UserSvc : uses
+OrderCtrl --> OrderSvc : uses
+ProdCtrl --> ProdSvc : uses
+
+' Service to Service
+OrderSvc --> UserSvc : validates user
+OrderSvc --> ProdSvc : checks inventory
+OrderSvc --> PaymentSvc : processes payment
+OrderSvc --> NotifSvc : sends notifications
+
+' Service to Repository
+UserSvc --> UserRepo : CRUD operations
+OrderSvc --> OrderRepo : CRUD operations
+ProdSvc --> ProdRepo : CRUD operations
+
+' Service to External
+PaymentSvc --> PaymentClient : payment processing
+NotifSvc --> EmailClient : email notifications
+ProdSvc --> S3Client : image upload
+
+' Repository to Database
+JPA --> DB : JDBC
+
+' Service to Cache
+UserSvc --> Cache : @Cacheable\n@CacheEvict
+ProdSvc --> Cache : @Cacheable
+
+' Service to Message Queue
+NotifSvc --> MQ : publish events
+OrderSvc --> MQ : publish events
+
+' DTOs usage
+UserCtrl ..> UserDTO : request/response
+OrderCtrl ..> OrderDTO : request/response
+ProdCtrl ..> ProdDTO : request/response
+
+' Entities usage
+UserRepo ..> UserEntity : manages
+OrderRepo ..> OrderEntity : manages
+ProdRepo ..> ProdEntity : manages
+
+' Security
+SecConfig ..> UserCtrl : secures
+SecConfig ..> OrderCtrl : secures
+SecConfig ..> ProdCtrl : secures
+
+' Configuration dependencies
+CacheConfig ..> Cache : configures
+DBConfig ..> DB : configures
+AsyncConfig ..> NotifSvc : enables async
+
+note right of SecConfig
+  JWT-based authentication
+  Role-based access control
+  CORS configuration
+  OAuth2 integration
+end note
+
+note bottom of Cache
+  Session storage
+  Query result caching
+  @Cacheable annotations
+  TTL: 1 hour
+end note
+
+note right of MQ
+  Event-driven architecture
+  Order events
+  Notification events
+  Dead letter queue
+end note
+
+note left of RestAPI
+  OpenAPI 3.0 documentation
+  Swagger UI available
+  Rate limiting enabled
+  API versioning: v1, v2
+end note
+
+@enduml
