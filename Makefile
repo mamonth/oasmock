@@ -1,6 +1,6 @@
 # Makefile for oasmock
 
-.PHONY: help build test test-unit test-integration lint clean coverage coverage-unit spec-coverage
+.PHONY: help build build-cross test test-unit test-integration lint clean coverage coverage-unit spec-coverage
 
 # Default target
 all: build
@@ -9,6 +9,7 @@ all: build
 help:
 	@echo "Available targets:"
 	@echo "  build          - compile the binary"
+	@echo "  build-cross    - cross-compile for linux, darwin, windows"
 	@echo "  test           - run all tests (unit + integration)"
 	@echo "  test-unit      - run unit tests only"
 	@echo "  test-integration - run integration tests only"
@@ -28,6 +29,12 @@ install:
 build:
 	go build -o bin/oasmock ./cmd/oasmock
 
+# Cross-compile for all platforms
+build-cross:
+	GOOS=linux GOARCH=amd64 go build -o bin/oasmock-linux-amd64 ./cmd/oasmock
+	GOOS=darwin GOARCH=amd64 go build -o bin/oasmock-darwin-amd64 ./cmd/oasmock
+	GOOS=windows GOARCH=amd64 go build -o bin/oasmock-windows-amd64.exe ./cmd/oasmock
+
 # Run tests
 test:
 	go test ./...
@@ -37,7 +44,7 @@ test-unit:
 	go test $(shell go list ./... | grep -v /test)
 
 # Run integration tests only
-test-integration: build
+test-integration:
 	go test ./test/...
 
 # Run tests with coverage check (70% threshold - current baseline, must not regress)

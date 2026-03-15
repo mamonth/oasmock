@@ -1,0 +1,246 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Unit Tests & Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      
+      - name: Install dependencies
+        run: go mod tidy
+      
+      - name: Run unit tests with coverage
+        run: make coverage-unit
+      
+      - name: Run linter
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout 5m
+  
+  spec-coverage:
+    name: Spec Coverage Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for spec coverage analysis
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      
+      - name: Check spec coverage
+        run: |
+          python3 scripts/analyze_scenario_coverage.py --detailed --output coverage_report.md
+          COVERAGE=$(python3 scripts/analyze_scenario_coverage.py --coverage-only)
+          if (( $(echo "$COVERAGE < 0.999" | bc -l) )); then
+            echo "ERROR: Spec coverage ${COVERAGE} is below required 100%"
+            exit 1
+          fi
+      
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-coverage-report
+          path: coverage_report.md
+  
+  build:
+    name: Build Binaries
+    needs: [unit-tests, spec-coverage]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "version=$(git describe --tags --always --dirty)" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Cross-compile binaries
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build -ldflags="-X 'main.version=${{ steps.version.outputs.version }}'" -o dist/oasmock-linux-amd64 ./cmd/oasmock
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-X 'main.version=${{ steps.version.outputs.version }}'" -o dist/oasmock-darwin-amd64 ./cmd/oasmock
+          GOOS=windows GOARCH=amd64 go build -ldflags="-X 'main.version=${{ steps.version.outputs.version }}'" -o dist/oasmock-windows-amd64.exe ./cmd/oasmock
+      
+      - name: Upload binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oasmock-binaries
+          path: dist/
+          retention-days: 7
+  
+  integration-tests:
+    name: Integration Tests
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      OASMOCK_TEST_SKIP_BUILD: "true"
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      
+      - name: Download binaries artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: oasmock-binaries
+          path: bin/
+      
+      - name: Make binary executable
+        run: chmod +x bin/oasmock-linux-amd64
+      
+      - name: Set up test binary
+        run: |
+          ln -sf $(pwd)/bin/oasmock-linux-amd64 $(pwd)/bin/oasmock
+          echo "Binary path: $(pwd)/bin/oasmock"
+      
+      - name: Run integration tests
+        run: go test ./test/...
+  
+  release:
+    name: Create Release
+    needs: integration-tests
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      
+      - name: Download binaries artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: oasmock-binaries
+          path: dist/
+      
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          gh release create $TAG \
+            --title "$TAG" \
+            --notes-file <(echo "Release $TAG - OpenAPI mock server") \
+            dist/oasmock-linux-amd64 \
+            dist/oasmock-darwin-amd64 \
+            dist/oasmock-windows-amd64.exe
+      
+      - name: Set up Node.js for npm publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      
+      - name: Create npm package
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          
+          # Prepare npm package structure
+          mkdir -p npm-package/bin
+          cp dist/oasmock-linux-amd64 npm-package/bin/oasmock-linux-amd64
+          cp dist/oasmock-darwin-amd64 npm-package/bin/oasmock-darwin-amd64
+          cp dist/oasmock-windows-amd64.exe npm-package/bin/oasmock-windows-amd64.exe
+          
+          # Create install script
+          cat > npm-package/install.js <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const os = require('os');
+          
+          const platform = os.platform();
+          const arch = os.arch();
+          
+          let binaryName;
+          if (platform === 'linux' && arch === 'x64') {
+            binaryName = 'oasmock-linux-amd64';
+          } else if (platform === 'darwin' && arch === 'x64') {
+            binaryName = 'oasmock-darwin-amd64';
+          } else if (platform === 'win32' && arch === 'x64') {
+            binaryName = 'oasmock-windows-amd64.exe';
+          } else {
+            console.error('Unsupported platform/arch:', platform, arch);
+            process.exit(1);
+          }
+          
+          const source = path.join(__dirname, 'bin', binaryName);
+          const target = path.join(__dirname, 'bin', 'oasmock');
+          fs.copyFileSync(source, target);
+          fs.chmodSync(target, '755');
+          EOF
+          
+          # Create package.json
+          cat > npm-package/package.json <<EOF
+          {
+            "name": "oasmock",
+            "version": "${VERSION}",
+            "description": "OpenAPI mock server with runtime expressions and extensions",
+            "bin": {
+              "oasmock": "./bin/oasmock"
+            },
+            "scripts": {
+              "install": "node install.js"
+            },
+            "repository": {
+              "type": "git",
+              "url": "git+https://github.com/mamonth/oasmock.git"
+            },
+            "keywords": ["openapi", "mock", "server", "testing"],
+            "author": "OpenCode",
+            "license": "MIT",
+            "bugs": {
+              "url": "https://github.com/mamonth/oasmock/issues"
+            },
+            "homepage": "https://github.com/mamonth/oasmock#readme",
+            "os": ["darwin", "linux", "win32"],
+            "cpu": ["x64"]
+          }
+          EOF
+      
+      - name: Publish to npm
+        working-directory: npm-package
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
