@@ -146,7 +146,7 @@ Retrieves the request history (optionally filtered by path, method, time range, 
 
 ### `POST /_mock/examples`
 
-Adds a dynamic example to an existing route. The request body follows the schema defined in [openapi.yaml](./openapi.yaml).
+Adds a dynamic example to an existing route. The request body follows the schema defined in [openapi.yaml](./api/openapi.yaml).
 
 ## Command‑Line Interface
 

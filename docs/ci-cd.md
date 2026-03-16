@@ -157,10 +157,11 @@ Create GitHub Release --> Publish npm Package
 3. Download binaries artifact
 4. Create or update GitHub release with all three binaries (handles auto-created drafts)
 5. Set up Node.js for npm publishing
-6. Create npm package structure:
-   - Copy binaries to `npm-package/bin/`
-   - Create `install.js` script for platform detection
-   - Create `package.json` with version from tag
+ 6. Create npm package structure:
+    - Copy binaries to `npm-package/bin/`
+    - Create `install.js` script for platform detection
+    - Generate `package.json` from template with version placeholder
+    - Copy documentation files (`README.md`, `LICENSE`, `CHANGELOG.md`, `docs/`)
 7. Publish to npm registry
 
 **Secrets Required:**
@@ -253,7 +254,7 @@ To add support for a new platform (e.g., ARM64):
    GOOS=linux GOARCH=arm64 go build -o dist/oasmock-linux-arm64 ./cmd/oasmock
    ```
 2. Update `install.js` in release job to handle new platform
-3. Update npm package.json `os` and `cpu` fields if needed
+ 3. Update npm package.json template in project root (`os` and `cpu` fields) if needed
 
 ### Changing Coverage Thresholds
 - Unit test coverage: Update `scripts/check-coverage.sh` call in `unit-tests` job

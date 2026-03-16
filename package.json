@@ -1,0 +1,44 @@
+{
+  "name": "oasmock",
+  "version": "{{version}}",
+  "description": "OpenAPI mock server with runtime expressions and extensions",
+  "bin": {
+    "oasmock": "./bin/oasmock"
+  },
+  "scripts": {
+    "install": "node install.js"
+  },
+  "files": [
+    "bin",
+    "install.js",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "docs",
+    "api"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mamonth/oasmock.git"
+  },
+  "keywords": [
+    "openapi",
+    "mock",
+    "server",
+    "testing"
+  ],
+  "author": "OpenCode",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/mamonth/oasmock/issues"
+  },
+  "homepage": "https://github.com/mamonth/oasmock#readme",
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ]
+}

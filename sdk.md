@@ -1,6 +1,6 @@
 # SDK Specification
 
-The OASMock provides a TypeScript/JavaScript SDK for programmatic interaction with the mock server. The SDK communicates via the HTTP API described in [openapi.yaml](./openapi.yaml).
+The OASMock provides a TypeScript/JavaScript SDK for programmatic interaction with the mock server. The SDK communicates via the HTTP API described in [openapi.yaml](./api/openapi.yaml).
 
 ## Installation
 

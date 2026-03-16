@@ -249,33 +249,13 @@ jobs:
           fs.chmodSync(target, '755');
           EOF
           
-          # Create package.json
-          cat > npm-package/package.json <<EOF
-          {
-            "name": "oasmock",
-            "version": "${VERSION}",
-            "description": "OpenAPI mock server with runtime expressions and extensions",
-            "bin": {
-              "oasmock": "./bin/oasmock"
-            },
-            "scripts": {
-              "install": "node install.js"
-            },
-            "repository": {
-              "type": "git",
-              "url": "git+https://github.com/mamonth/oasmock.git"
-            },
-            "keywords": ["openapi", "mock", "server", "testing"],
-            "author": "OpenCode",
-            "license": "MIT",
-            "bugs": {
-              "url": "https://github.com/mamonth/oasmock/issues"
-            },
-            "homepage": "https://github.com/mamonth/oasmock#readme",
-            "os": ["darwin", "linux", "win32"],
-            "cpu": ["x64"]
-          }
-          EOF
+           # Create package.json from template with version replacement
+           sed "s/{{version}}/${VERSION}/g" package.json > npm-package/package.json
+            
+           # Copy documentation and license files to npm package
+           cp README.md LICENSE CHANGELOG.md npm-package/
+           cp -r docs npm-package/
+           cp -r api npm-package/
       
       - name: Publish to npm
         working-directory: npm-package
