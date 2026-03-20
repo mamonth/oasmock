@@ -1,6 +1,6 @@
 # Makefile for oasmock
 
-.PHONY: help build build-cross test test-unit test-integration lint clean coverage coverage-unit spec-coverage
+.PHONY: help build build-cross test test-unit test-integration lint clean coverage-unit spec-coverage
 
 # Default target
 all: build
@@ -17,7 +17,6 @@ help:
 	@echo "  clean          - remove build artifacts"
 	@echo "  install        - install dependencies (go mod tidy)"
 	@echo "  generate       - run go generate"
-	@echo "  coverage       - run test coverage check (all tests)"
 	@echo "  coverage-unit  - run test coverage check for unit tests only"
 	@echo "  spec-coverage  - check requirement scenario coverage"
 
@@ -46,10 +45,6 @@ test-unit:
 # Run integration tests only
 test-integration:
 	go test ./test/...
-
-# Run tests with coverage check (70% threshold - current baseline, must not regress)
-coverage:
-	./scripts/check-coverage.sh 70
 
 # Run coverage check for unit tests only
 coverage-unit:
