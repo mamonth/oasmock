@@ -61,24 +61,7 @@ func parseSchemaConfig(cmd *cobra.Command) error {
 		return nil
 	}
 
-	schemaVal := viper.Get("schema")
 	schemasVal := viper.Get("schemas")
-
-	// Check mutual exclusivity
-	if schemaVal != nil && schemasVal != nil {
-		return validationError("cannot specify both 'schema' and 'schemas' in config file")
-	}
-
-	// Handle single schema
-	if schemaVal != nil {
-		schema, ok := schemaVal.(string)
-		if !ok {
-			return validationError("'schema' must be a string")
-		}
-		config.sources = []string{schema}
-		config.prefixes = []string{}
-		return nil
-	}
 
 	// Handle schemas list
 	if schemasVal != nil {
@@ -162,8 +145,6 @@ func init() {
 	_ = viper.BindPFlag("nocors", mockCmd.Flags().Lookup("nocors"))
 	_ = viper.BindPFlag("history_size", mockCmd.Flags().Lookup("history-size"))
 	_ = viper.BindPFlag("no_control_api", mockCmd.Flags().Lookup("no-control-api"))
-	_ = viper.BindPFlag("from", mockCmd.Flags().Lookup("from"))
-	_ = viper.BindPFlag("prefix", mockCmd.Flags().Lookup("prefix"))
 }
 
 func runMock(cmd *cobra.Command, args []string) error {

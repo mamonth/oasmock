@@ -17,7 +17,7 @@
   - `test/_shared` - Common files for tests codebase including fixtures, helper functions, resources etc
     - `test/_shared/resources` - Various resources (e.g. yaml, json files)
 - `docs/` - Project documentation
-  - `docs/diagrams` - PlantUML diagrams
+  - `docs/diagrams` - PlantUML diagrams (container for extracted `.puml` files)
 
 ## Conventions
 
@@ -30,8 +30,20 @@
 - Use Testify package for all test assertions
 - Define multiple test scenarios using slice of structs
 - Each test should be marked with list of requirement scenario codes from [openspec's specs](`openspec/specs`)
-- Unit tests: place near tested module with `_test.go` suffix
-- Integration tests: place under `test/` directory, skip when `testing.Short()`
+- Benchmarks can be unit or integrative, and MUST comply with the corresponding rules
+- **Unit tests** - checking one interface at the time
+  - SHOULD be placed near tested module with `_test.go` suffix
+  - MUST call one interface per test exclusively
+  - All dependencies including public interfaces calls within project codebase MUST be mocked or stubbed
+  - Private interfaces SHOULD NOT be tested directly, although they coverage MUST be implemented indirectly
+  - MUST be placed near tested module
+  - SHOULD use parralel execution when conflicts completely impossible
+  - SHOULD contain one assertion (or one logical group of assertions) per test
+- **Integration tests** - checks ready-to-ship application as a complete system
+  - SHOULD be placed under `test/` directory, skip when `testing.Short()`
+  - MUST check gaps in unit test cases and system integration result 
+  - SHOULD NOT call any internal interfaces directly (only bundled system as black box)
+  - MUST be placed at test/ or it's subdirectories
 
 ## Coverage Policy
 - **Code coverage**: Minimum threshold (currently 70%) that must not regress

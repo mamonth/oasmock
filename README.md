@@ -5,18 +5,19 @@
 ![spec coverage](https://img.shields.io/badge/spec_coverage-100%25-brightgreen)
 ![Go](https://img.shields.io/badge/go-1.23+-00ADD8)
 
-A Go‑based mock server that leverages OpenAPI 3.0 schemas enhanced with custom extensions for conditional examples, state management, and runtime expressions.
+A Go‑based mock server that leverages OpenAPI 3.0 schemas enhanced with custom extensions for conditional examples, state management, runtime expressions, and JSON-RPC 2.0 support.
 
 ## Features
 
 - Loads one or more OpenAPI 3.0 YAML/JSON files (with optional path prefixes)
-- Supports custom extensions (`x‑mock‑params‑match`, `x‑mock‑skip`, `x‑mock‑once`, `x‑mock‑set‑state`, `x‑mock‑headers`)
+- Supports custom extensions (`x‑mock‑match`, `x‑mock‑skip`, `x‑mock‑once`, `x‑mock‑set‑state`, `x‑mock‑headers`; legacy `x‑mock‑params‑match` alias still supported)
 - Runtime expressions (`{$request.path.id}`, `{$state.counter}`, `{$env.VAR}`) with modifiers (`default`, `getByPath`, `toJWT`)
 - In‑memory state per namespace (get/set/increment/delete)
 - Request history ring buffer with filtering via management API
 - Dynamic example injection at runtime via HTTP API
 - Configurable request delay, CORS, verbose logging
-- Single binary, zero dependencies
+- Single static binary, no runtime dependencies
+- JSON‑RPC 2.0 gateway via `x‑rpc` extension (batch requests, notifications)
 
 ## Installation
 
@@ -70,83 +71,48 @@ curl http://localhost:8080/hello
 
 ## OpenAPI Extensions
 
-OASMock adds several custom extensions to OpenAPI example objects. Full documentation is available in [extensions.md](./extensions.md).
+OASMock adds several custom extensions to OpenAPI example objects. Full reference: [extensions.md](./docs/extensions.md).
 
-### `x‑mock‑params‑match`
+### Match Conditions (`x‑mock‑match`)
 
-Selects the example when the request matches the given conditions.
+Selects the example when the request matches the given conditions (deprecated alias: `x‑mock‑params‑match`).
 
 ```yaml
 examples:
   admin:
-    x‑mock‑params‑match:
+    x‑mock‑match:
       '{$request.header.role}': admin
     value:
       message: Welcome, admin!
 ```
 
-### `x‑mock‑skip`
+### Other Extensions
 
-Skips the example (useful for temporarily disabling an example).
+| Extension | Purpose |
+|---|---|
+| `x‑mock‑skip` | Temporarily exclude an example |
+| `x‑mock‑once` | One‑time example (removed after first match) |
+| `x‑mock‑set‑state` | Update server‑side state (supports `increment`, `value`, `null` for delete) |
+| `x‑mock‑headers` | Set response headers (runtime expressions in values) |
 
-### `x‑mock‑once`
+### JSON‑RPC Gateway (`x‑rpc`)
 
-Makes the example one‑time only (removed after first match).
-
-### `x‑mock‑set‑state`
-
-Updates server‑side state that can be referenced later via `{$state.*}`.
-
-```yaml
-x‑mock‑set‑state:
-  counter:
-    increment: 1
-  'user-{$request.path.id}':
-    value: '{$request.body.name}'
-```
-
-### `x‑mock‑headers`
-
-Sets response headers (supports runtime expressions in values).
+Route calls by body field instead of URL path. See [json-rpc.md](./docs/json-rpc.md).
 
 ## Runtime Expressions
 
-Runtime expressions are enclosed in `{$...}` and can appear in extension keys, values, and response bodies.
+Runtime expressions are enclosed in `{$...}` and resolved at request time. Data sources: `{$request.path.param}`, `{$request.query.param}`, `{$request.header.name}`, `{$request.body.field}`, `{$request.cookie.name}`, `{$state.key}`, `{$env.VARIABLE}`.
 
-### Data Sources
+Modifiers: `\|default:value` (fallback), `\|getByPath:path` (traverse nested objects), `\|toJWT` (stub).
 
-- `{$request.path.param}`
-- `{$request.query.param}`
-- `{$request.header.name}`
-- `{$request.cookie.name}`
-- `{$request.body.field}`
-- `{$state.key}`
-- `{$env.VARIABLE}`
-
-### Modifiers
-
-- `{$request.query.id|default:unknown}` – provides a default value if the expression cannot be resolved
-- `{$state.object|getByPath:deep.nested.value}` – traverses an object
-- `{$state.payload|toJWT}` – (stub) encodes the value as a JWT
-
-Embedded expressions are supported:
-
-```yaml
-value:
-  url: "/api/users/{$request.path.id}/profile"
-```
+Expressions can appear in extension keys, values, and response bodies. Full reference: [extensions.md](./docs/extensions.md#runtime-expressions).
 
 ## Management API
 
-The server exposes a control HTTP API under the `/_mock` prefix.
+The server exposes a control HTTP API under the `/_mock` prefix. Full schema: [api/openapi.yaml](./api/openapi.yaml).
 
-### `GET /_mock/requests`
-
-Retrieves the request history (optionally filtered by path, method, time range, etc.).
-
-### `POST /_mock/examples`
-
-Adds a dynamic example to an existing route. The request body follows the schema defined in [openapi.yaml](./api/openapi.yaml).
+- `GET /_mock/requests` — request history (filterable by path, method, time range, pagination)
+- `POST /_mock/examples` — add a dynamic example to an existing route
 
 ## Command‑Line Interface
 
@@ -189,6 +155,16 @@ go test ./...
 ```bash
 golangci-lint run
 ```
+
+## Further Reading
+
+- [CLI reference](./docs/cli.md) — all flags, env vars, config file (`.oasmock.yaml`)
+- [Extensions & runtime expressions](./docs/extensions.md) — full `x‑mock‑*` / `x‑rpc` reference
+- [JSON‑RPC 2.0](./docs/json-rpc.md) — protocol details, batch support, error codes
+- [Architecture](./docs/architecture.md) — component diagrams, interfaces, data flows
+- [CI/CD](./docs/ci-cd.md) — pipeline, quality gates, release process
+- [Project standards](./docs/project.md) — tech stack, conventions, testing, coverage policy
+- [Specifications (BDD)](./openspec/specs/) — requirement scenarios
 
 ## License
 

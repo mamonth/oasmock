@@ -14,55 +14,36 @@ The OASMock CI/CD pipeline is a unified GitHub Actions workflow that ensures cod
 
 ## Pipeline Architecture
 
-```plantuml
-@startuml
-title OASMock CI/CD Pipeline
-skinparam backgroundColor #F5F5F5
-skinparam activityBackgroundColor #FFFFFF
-skinparam activityBorderColor #333333
-skinparam activityFontSize 14
-skinparam arrowColor #333333
+```mermaid
+flowchart TD
+    subgraph P1["Parallel Fast Checks"]
+        direction LR
+        A[Unit Tests & Coverage]
+        B[Spec Coverage Check]
+    end
 
-start
+    subgraph P2["Build & Package"]
+        C[Build Binaries<br/>Cross-compile for:<br/>• Linux amd64<br/>• macOS amd64<br/>• Windows amd64]
+        D[Upload Artifacts]
+    end
 
-partition "Parallel Fast Checks" {
-  :Unit Tests & Coverage;
-  :Spec Coverage Check;
-}
+    subgraph P3["Integration Testing"]
+        E[Download Linux Binary]
+        F[Run Integration Tests]
+    end
 
-partition "Build & Package" {
-  :Build Binaries;
-  note right
-    Cross-compile for:
-    - Linux (amd64)
-    - macOS (amd64)
-    - Windows (amd64)
-  end note
-  :Upload Artifacts;
-}
+    subgraph P4["Release Tags Only"]
+        G[Create GitHub Release]
+        H[Publish npm Package]
+    end
 
-partition "Integration Testing" {
-  :Download Linux Binary;
-  :Run Integration Tests;
-}
-
-partition "Release (Tags Only)" {
-  :Create GitHub Release;
-  :Publish npm Package;
-}
-
-stop
-
-' Dependency arrows
-Unit Tests & Coverage --> Build Binaries
-Spec Coverage Check --> Build Binaries
-Build Binaries --> Upload Artifacts
-Upload Artifacts --> Download Linux Binary
-Download Linux Binary --> Run Integration Tests
-Run Integration Tests --> Create GitHub Release
-Create GitHub Release --> Publish npm Package
-
-@enduml
+    A --> C
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    G --> H
 ```
 
 ## Trigger Events
@@ -170,44 +151,39 @@ Create GitHub Release --> Publish npm Package
 
 ## Artifact Flow
 
-```plantuml
-@startuml
-title Artifact Flow Through Pipeline
-skinparam backgroundColor #F5F5F5
+```mermaid
+flowchart LR
+    subgraph BUILD["Build Job"]
+        A[dist/oasmock-linux-amd64]
+        B[dist/oasmock-darwin-amd64]
+        C[dist/oasmock-windows-amd64.exe]
+    end
 
-rectangle "Build Job" as build {
-  file "dist/oasmock-linux-amd64" as linux
-  file "dist/oasmock-darwin-amd64" as darwin
-  file "dist/oasmock-windows-amd64.exe" as windows
-}
+    subgraph ARTIFACTS["GitHub Artifacts"]
+        D[oasmock-binaries]
+    end
 
-database "GitHub Artifacts" as artifacts {
-  file "oasmock-binaries" as artifact
-}
+    subgraph INTEG["Integration Tests"]
+        E[bin/oasmock-linux-amd64]
+    end
 
-rectangle "Integration Tests" as integration {
-  file "bin/oasmock-linux-amd64" as testbin
-}
+    subgraph RELEASE["Release Job"]
+        F[dist/*]
+    end
 
-rectangle "Release Job" as release {
-  file "dist/*" as releasebin
-}
+    subgraph GH["GitHub Release"]
+        G[Release Assets]
+    end
 
-cloud "GitHub Release" as github {
-  file "Release Assets" as assets
-}
+    subgraph NPM["npm Registry"]
+        H[npm package]
+    end
 
-cloud "npm Registry" as npm {
-  file "npm package" as npmpkg
-}
-
-build --> artifacts : Upload
-artifacts --> integration : Download (linux only)
-artifacts --> release : Download (all)
-release --> github : Create release with binaries
-release --> npm : Publish package
-
-@enduml
+    BUILD -->|Upload| ARTIFACTS
+    ARTIFACTS -->|Download linux only| INTEG
+    ARTIFACTS -->|Download all| RELEASE
+    RELEASE -->|Create release with binaries| GH
+    RELEASE -->|Publish package| NPM
 ```
 
 ## Environment Variables
@@ -272,15 +248,3 @@ To add support for a new platform (e.g., ARM64):
 - `scripts/check-coverage.sh` - Coverage check script
 - `scripts/analyze_scenario_coverage.py` - Spec coverage analysis
 - `test/_shared/binhelper/` - Binary helper for integration tests
-
-## Migration from Previous Workflows
-
-This unified pipeline replaces:
-- `.github/workflows/go.yml` (build and test)
-- `.github/workflows/release.yml` (release)
-
-The new pipeline provides:
-- Better parallelism (unit tests + spec coverage)
-- Single build artifact reused across jobs
-- Consistent "test what you ship" approach
-- Simplified maintenance with single workflow file

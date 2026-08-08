@@ -1,32 +1,52 @@
 # OASMock Architecture Documentation
 
 ## Table of Contents
-1. [Overview](#overview)
-   - [Diagram Conventions](#diagram-conventions)
-2. [Component Architecture](#1-component-architecture)
-3. [Component Details](#2-component-details)
-   - [2.1 CLI Component](#21-cli-component-cmdoasmock)
-   - [2.2 Server Component](#22-server-component-internalserver)
-   - [2.3 Runtime Component](#23-runtime-component-internalruntime)
-   - [2.4 Extensions Component](#24-extensions-component-internalextensions)
-   - [2.5 Loader Component](#25-loader-component-internalloader)
-   - [2.6 State Component](#26-state-component-internalstate)
-   - [2.7 History Component](#27-history-component-internalhistory)
-   - [2.8 Mock Component](#28-mock-component-mock)
-4. [Sequence Flows](#3-sequence-flows)
-   - [3.1 CLI Initialization Flow](#31-cli-initialization-flow)
-   - [3.2 HTTP Mock Request Flow](#32-http-mock-request-flow)
-   - [3.3 Management API - Dynamic Example Addition](#33-management-api---dynamic-example-addition)
-5. [Interface Definitions](#4-interface-definitions)
-   - [4.1 Server Interfaces](#41-server-interfaces-internalserverinterfacesgo)
-   - [4.2 Runtime Interfaces](#42-runtime-interfaces-internalruntimeexpressiongo)
-   - [4.3 Extension Functions](#43-extension-functions-internalextractionsextractgo)
-6. [Data Flow Summary](#5-data-flow-summary)
-7. [Design Patterns](#6-design-patterns)
-8. [Testing Architecture](#7-testing-architecture)
-9. [Extension Points](#8-extension-points)
-10. [Performance Considerations](#9-performance-considerations)
-11. [Conclusion](#conclusion)
+- [OASMock Architecture Documentation](#oasmock-architecture-documentation)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+    - [Diagram Conventions](#diagram-conventions)
+  - [1. Component Architecture](#1-component-architecture)
+  - [2. Component Details](#2-component-details)
+    - [2.1 CLI Component (`cmd/oasmock/`)](#21-cli-component-cmdoasmock)
+    - [2.2 Server Component (`internal/server/`)](#22-server-component-internalserver)
+    - [2.3 Runtime Component (`internal/runtime/`)](#23-runtime-component-internalruntime)
+    - [2.4 Extensions Component (`internal/extensions/`)](#24-extensions-component-internalextensions)
+    - [2.5 Loader Component (`internal/loader/`)](#25-loader-component-internalloader)
+    - [2.6 State Component (`internal/state/`)](#26-state-component-internalstate)
+    - [2.7 History Component (`internal/history/`)](#27-history-component-internalhistory)
+    - [2.8 Mock Component (`mock/`)](#28-mock-component-mock)
+  - [3. Sequence Flows](#3-sequence-flows)
+    - [3.1 CLI Initialization Flow](#31-cli-initialization-flow)
+    - [3.2 HTTP Mock Request Flow](#32-http-mock-request-flow)
+    - [3.3 Management API - Dynamic Example Addition](#33-management-api---dynamic-example-addition)
+  - [4. Interface Definitions](#4-interface-definitions)
+    - [4.1 Server Interfaces (`internal/server/interfaces.go`)](#41-server-interfaces-internalserverinterfacesgo)
+    - [4.2 Runtime Interfaces (`internal/runtime/expression.go`)](#42-runtime-interfaces-internalruntimeexpressiongo)
+    - [4.3 Extension Functions (`internal/extensions/extract.go`)](#43-extension-functions-internalextensionsextractgo)
+  - [5. Data Flow Summary](#5-data-flow-summary)
+    - [5.1 Initialization Flow](#51-initialization-flow)
+    - [5.2 Request Handling Flow](#52-request-handling-flow)
+    - [5.3 State Management Flow](#53-state-management-flow)
+    - [5.4 History Tracking Flow](#54-history-tracking-flow)
+    - [5.5 Dynamic Example Flow](#55-dynamic-example-flow)
+  - [6. Design Patterns](#6-design-patterns)
+    - [6.1 Dependency Injection](#61-dependency-injection)
+    - [6.2 Adapter Pattern](#62-adapter-pattern)
+    - [6.3 Factory Pattern](#63-factory-pattern)
+    - [6.4 Strategy Pattern](#64-strategy-pattern)
+    - [6.5 Observer Pattern](#65-observer-pattern)
+  - [7. Testing Architecture](#7-testing-architecture)
+    - [7.1 Mock Generation](#71-mock-generation)
+    - [7.2 Unit Testing Strategy](#72-unit-testing-strategy)
+    - [7.3 Integration Testing](#73-integration-testing)
+  - [8. Extension Points](#8-extension-points)
+    - [8.1 Custom Data Sources](#81-custom-data-sources)
+    - [8.2 Custom Extension Processing](#82-custom-extension-processing)
+    - [8.3 Custom State/History Stores](#83-custom-statehistory-stores)
+  - [9. Performance Considerations](#9-performance-considerations)
+    - [9.1 Memory Management](#91-memory-management)
+    - [9.2 Concurrency](#92-concurrency)
+    - [9.3 Runtime Evaluation](#93-runtime-evaluation)
 
 ## Overview
 
@@ -34,224 +54,82 @@ OASMock is an OpenAPI-based mock server with a modular architecture built in Go.
 
 ### Diagram Conventions
 
-All PlantUML diagrams in this document follow the guidelines from the [plantuml-creator skill](../.opencode/skills/plantuml-creator/SKILL.md) to ensure consistency and maintainability:
+All diagrams in this document use Mermaid syntax for broad compatibility across Git SaaS platforms and IDEs:
 
-- **Source annotations**: Each diagram element that corresponds to actual code includes a source reference in the format `/'source: @/path/to/file.go:line'/` linking to the relevant file and line number.
-- **Modern styling**: Diagrams use the modern `<style>` tag with CSS-like syntax instead of legacy `skinparam` commands.
-- **Consistent typing**: The same conceptual entity uses the same PlantUML type (`component`, `participant`, `control`, etc.) and alias across all diagrams.
-- **Loop constructs**: Iterative processes are expressed with explicit `loop` blocks instead of text labels.
-- **Activation/deactivation**: Sequence diagrams balance every `activate` with a corresponding `deactivate` to show processing scope.
-- **Legends and captions**: Diagrams include legends explaining color coding and captions for figure numbering.
+- **Node styling**: Nodes use `classDef` and `class` for consistent color-coded layers matching the four-layer architecture.
+- **Sequence diagrams**: Use `box` for participant grouping, `autonumber` for step numbering, `alt/else` for branching, and `loop` for iterative processes.
+- **Flowcharts**: Use `flowchart` with `subgraph` for structural grouping and `classDef` for color-coded node styles.
+- **Activation/deactivation**: Sequence diagrams balance every activation with a corresponding deactivation to show processing scope.
+- **Figure captions**: Diagrams include figure captions for reference numbering.
 - **Unicode symbols**: Emojis and symbols (🎯, ⚙️, 🔧) provide visual semantics.
 
 ## 1. Component Architecture
 
-```plantuml
-@startuml oasmock-component-architecture
-!theme cerulean
+```mermaid
+flowchart LR
+    subgraph PRES["🎯 Presentation Layer"]
+        CLI["CLI<br/>cmd/oasmock/"]
+    end
+    subgraph APP["⚙️ Application Layer"]
+        Server["Server<br/>internal/server/"]
+    end
+    subgraph DOM["🔧 Domain Layer"]
+        Runtime["Runtime<br/>internal/runtime/"]
+        Extensions["Extensions<br/>internal/extensions/"]
+    end
+    subgraph INF["🛠️ Infrastructure Layer"]
+        Loader["Loader<br/>internal/loader/"]
+        State["State<br/>internal/state/"]
+        History["History<br/>internal/history/"]
+        Mock["Mock<br/>mock/"]
+    end
+    subgraph LEGEND["Legend"]
+        direction LR
+        L1["Presentation"]
+        L2["Application"]
+        L3["Domain"]
+        L4["Infrastructure"]
+    end
 
-<style>
-componentDiagram {
-  component {
-    BackgroundColor #E8F5E9
-    BorderColor #2E7D32
-    FontColor #1B5E20
-  }
-  .cli {
-    BackgroundColor #E8F5E9
-    BorderColor #2E7D32
-    FontColor #1B5E20
-  }
-  .server {
-    BackgroundColor #E3F2FD
-    BorderColor #1565C0
-    FontColor #0D47A1
-  }
-  .runtime {
-    BackgroundColor #F3E5F5
-    BorderColor #7B1FA2
-    FontColor #4A148C
-  }
-  .extensions {
-    BackgroundColor #FFF3E0
-    BorderColor #F57C00
-    FontColor #E65100
-  }
-  .loader {
-    BackgroundColor #FFF8E1
-    BorderColor #FF8F00
-    FontColor #FF6F00
-  }
-  .state {
-    BackgroundColor #FFEBEE
-    BorderColor #C2185B
-    FontColor #880E4F
-  }
-  .history {
-    BackgroundColor #E0F2F1
-    BorderColor #00897B
-    FontColor #004D40
-  }
-  .mock {
-    BackgroundColor #F5F5F5
-    BorderColor #616161
-    FontColor #424242
-  }
-  arrow {
-    LineColor #616161
-    LineThickness 1.5
-  }
-}
-</style>
+    CLI -->|Load schemas| Loader
+    CLI -->|Start server| Server
 
-title 🏗️ OASMock Component Architecture
+    Server -->|"RouteProvider.BuildRouteMappings()"| Loader
+    Server -->|ExpressionEvaluator, DataSource factories| Runtime
+    Server -->|ExtensionProcessor| Extensions
+    Server -->|StateStore operations| State
+    Server -->|HistoryStore operations| History
 
-package "🎯 Presentation Layer" #E8F5E9 {
-  /'source: @/cmd/oasmock'/
-  [CLI] <<cli>> as CLI
-  /'source: @/cmd/oasmock'/
-  note right of CLI
-    **Responsibilities**:
-    - Parse command-line arguments
-    - Load configuration
-    - Start server
-    - Handle graceful shutdown
-    **Key Files**:
-    - cmd/oasmock/root.go
-    - cmd/oasmock/mock.go
-  end note
-}
+    Extensions -->|Uses Evaluator for param matching| Runtime
 
-package "⚙️ Application Layer" #E3F2FD {
-  /'source: @/internal/server'/
-  [Server\n(internal/server/)] <<server>> as Server
-  /'source: @/internal/server/server.go:101'/
-  note right of Server
-    **Responsibilities**:
-    - HTTP server management
-    - Request routing
-    - Response generation
-    - Component coordination
-    **Key Interfaces**:
-    - RouteProvider
-    - StateStore
-    - HistoryStore
-    - ExpressionEvaluator
-    - ExtensionProcessor
-  end note
-}
+    Mock -.->|Mocks all server interfaces| Server
+    Mock -.->|Mocks runtime interfaces| Runtime
 
-package "🔧 Domain Layer" #F3E5F5 {
-  /'source: @/internal'/
-  [Runtime\n(internal/runtime/)] <<runtime>> as Runtime
-  /'source: @/internal/runtime/expression.go:180'/
-  note right of Runtime
-    **Responsibilities**:
-    - Runtime expression evaluation
-    - Data source abstraction
-    **Key Interfaces**:
-    - DataSource
-    - Evaluator
-    **Implementations**:
-    - RequestSource
-    - StateSource
-    - EnvSource
-  end note
-  
-  [Extensions\n(internal/extensions/)] <<extensions>> as Extensions
-  /'source: @/internal/extensions/extract.go:20'/
-  note right of Extensions
-    **Responsibilities**:
-    - Process OpenAPI extensions
-    - x-mock-* extension handling
-    **Functions**:
-    - ExtractSetState()
-    - ExtractParamsMatch()
-    - EvaluateParamsMatch()
-    - ExtractHeaders()
-  end note
-}
+    classDef green fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20
+    classDef blue fill:#E3F2FD,stroke:#1565C0,color:#0D47A1
+    classDef purple fill:#F3E5F5,stroke:#7B1FA2,color:#4A148C
+    classDef orange fill:#FFF3E0,stroke:#F57C00,color:#E65100
+    classDef yellow fill:#FFF8E1,stroke:#FF8F00,color:#FF6F00
+    classDef pink fill:#FFEBEE,stroke:#C2185B,color:#880E4F
+    classDef teal fill:#E0F2F1,stroke:#00897B,color:#004D40
+    classDef gray fill:#F5F5F5,stroke:#616161,color:#424242
+    classDef leg fill:none,stroke:#ccc,color:#424242
 
-package "🛠️ Infrastructure Layer" #FFF8E1 {
-  /'source: @/internal'/
-  [Loader\n(internal/loader/)] <<loader>> as Loader
-  /'source: @/internal/loader/schema.go:20'/
-  note right of Loader
-    **Responsibilities**:
-    - Load OpenAPI schemas
-    - Build route mappings
-    - Path pattern conversion
-    **Key Types**:
-    - SchemaInfo
-    - RouteMapping
-  end note
-  
-  [State\n(internal/state/)] <<state>> as State
-  /'source: @/internal/state/state.go:20'/
-  note right of State
-    **Responsibilities**:
-    - Namespaced key-value storage
-    - Thread-safe operations
-    **Key Type**:
-    - Manager
-    **Operations**:
-    - Get/Set/Increment/Delete
-    - GetNamespace/GetAll
-  end note
-  
-  [History\n(internal/history/)] <<history>> as History
-  /'source: @/internal/history/history.go:20'/
-  note right of History
-    **Responsibilities**:
-    - Request/response history
-    - Ring buffer storage
-    **Key Types**:
-    - RequestRecord
-    - ResponseRecord
-    - RingBuffer
-  end note
-  
-  [Mock\n(mock/)] <<mock>> as Mock
-  /'source: @/mock'/
-  note right of Mock
-    **Responsibilities**:
-    - Generated interface mocks
-    - Unit testing support
-    **Packages**:
-    - mock_runtime
-    - mock_server
-    **Generated via**:
-    - go:generate mockgen
-  end note
-}
-
-' Dependency Relationships
-CLI --> Loader : Load schemas
-CLI --> Server : Start server
-
-Server --> Loader : RouteProvider.BuildRouteMappings()
-Server --> Runtime : ExpressionEvaluator, DataSource factories
-Server --> Extensions : ExtensionProcessor
-Server --> State : StateStore operations
-Server --> History : HistoryStore operations
-
-Extensions --> Runtime : Uses Evaluator for param matching
-
-Mock ..> Server : Mocks all server interfaces
-Mock ..> Runtime : Mocks runtime interfaces
-
-legend right
-  |<back:#E8F5E9> Color | Layer |
-  |<back:#E8F5E9> Light Green | Presentation |
-  |<back:#E3F2FD> Light Blue | Application |
-  |<back:#F3E5F5> Light Purple | Domain |
-  |<back:#FFF8E1> Light Yellow | Infrastructure |
-endlegend
-
-caption Figure 1: High-level component architecture
-
-@enduml
+    class CLI green
+    class Server blue
+    class Runtime purple
+    class Extensions orange
+    class Loader yellow
+    class State pink
+    class History teal
+    class Mock gray
+    class L1 green
+    class L2 blue
+    class L3 purple
+    class L4 yellow
 ```
+
+*Figure 1: High-level component architecture*
 
 ## 2. Component Details
 
@@ -274,8 +152,14 @@ caption Figure 1: High-level component architecture
 - **Key Files**:
   - `server.go` - Main server implementation and HTTP handlers
   - `interfaces.go` - All public interfaces and dependency definitions
-  - `server_management.go` - Management API endpoints
-  - `wrappers.go` - Adapter implementations
+   - `server_management.go` - Management API endpoints
+   - `server_example.go` - Example selection and response generation
+   - `server_eval.go` - Runtime expression evaluation integration
+   - `server_state.go` - State management helpers
+   - `jsonrpc.go` - JSON-RPC handler (gateway requests)
+   - `jsonrpc_protocol.go` - JSON-RPC 2.0 protocol parsing and error responses
+   - `wrappers.go` - Adapter implementations
+   - `adapters/` - Formal adapter layer for external components
 - **Public Interfaces**:
   - `RouteProvider` - Builds route mappings from OpenAPI schemas
   - `StateStore` - Manages namespaced state with CRUD operations
@@ -289,7 +173,8 @@ caption Figure 1: High-level component architecture
   - Response generation and example selection
   - Runtime expression evaluation coordination
   - Extension processing and state updates
-  - Management API endpoints (`/_mock/examples`, `/_mock/requests`)
+   - Management API endpoints (`/_mock/examples`, `/_mock/requests`)
+   - RPC gateway dispatch (JSON-RPC to operation mapping via `x-rpc`)
 - **Dependencies**: Loader, Runtime, Extensions, State, History
 
 ### 2.3 Runtime Component (`internal/runtime/`)
@@ -318,7 +203,7 @@ caption Figure 1: High-level component architecture
   - `x-mock-set-state` - Set server state after response
   - `x-mock-skip` - Skip example from selection
   - `x-mock-once` - Use example only once
-  - `x-mock-params-match` - Conditional example selection
+  - `x-mock-match` - Conditional example selection (legacy alias: `x-mock-params-match`)
   - `x-mock-headers` - Custom response headers
 - **Functions**:
   - `ExtractSetState()`, `ExtractParamsMatch()`, `ExtractHeaders()`
@@ -388,7 +273,24 @@ caption Figure 1: High-level component architecture
   - Thread-safe concurrent access
 - **Dependencies**: None (self-contained)
 
-### 2.8 Mock Component (`mock/`)
+### 2.8 RPC Protocol Subsystem (`internal/server/` and `internal/loader/`)
+**Purpose**: JSON-RPC 2.0 gateway enabling procedure dispatch by body field instead of URL path.
+- **Key Files**:
+  - `internal/server/jsonrpc.go` - RPC handler (batch support, notification handling)
+  - `internal/server/jsonrpc_protocol.go` - JSON-RPC 2.0 protocol (parse, error responses)
+  - `internal/loader/rpc.go` - `x-rpc` extension parsing
+  - `internal/loader/rpc_config.go` - RPC configuration types
+- **Key Interfaces**:
+  - `RpcProtocol` - `ParseBody()`, `ErrorResponse()`, `ContentType()`
+  - `RpcCall` - Parsed call representation (Procedure, ID, Raw body)
+- **Responsibilities**:
+  - Parse batch and single JSON-RPC request bodies
+  - Dispatch each call through the example selection pipeline
+  - Handle notifications (no response entry)
+  - Generate standard JSON-RPC 2.0 error responses
+- **Dependencies**: Extensions (for x-mock-* processing), Runtime (expression evaluation)
+
+### 2.9 Mock Component (`mock/`)
 **Purpose**: Generated interface mocks for unit testing.
 - **Packages**:
   - `mock_runtime` - Mocks for runtime interfaces (`DataSource`, `Evaluator`)
@@ -407,113 +309,67 @@ caption Figure 1: High-level component architecture
 
 ### 3.1 CLI Initialization Flow
 
-```plantuml
-@startuml cli-init-sequence-grouped
-!theme cerulean
-autonumber "<b>[000]"
+```mermaid
+sequenceDiagram
+    autonumber
 
-<style>
-sequenceDiagram {
-  actor {
-    BackgroundColor #E8F5E9
-    BorderColor #2E7D32
-    FontColor #1B5E20
-  }
-  participant {
-    BackgroundColor #E3F2FD
-    BorderColor #1565C0
-    FontColor #0D47A1
-  }
-  database {
-    BackgroundColor #FFF8E1
-    BorderColor #FF8F00
-    FontColor #FF6F00
-  }
-  arrow {
-    LineColor #616161
-    LineThickness 1.5
-  }
-  note {
-    BackgroundColor #FFFDE7
-    BorderColor #FBC02D
-    FontColor #F57F17
-  }
-}
-</style>
+    actor User as 👤 User
+    box 🎯 CLI Component
+        participant CLI as 🖥️ CLI<br/>(cmd/oasmock)
+    end
+    box 🛠️ Loader Component
+        participant Loader as 📚 loader.LoadSchemas
+    end
+    box ⚙️ Server Component
+        participant ServerNew as 🏗️ server.New
+        participant RouteProvider as 🔧 RouteProvider
+        participant ServerStart as 🚀 Server.Start
+        participant HTTPServer as 🌐 http.Server
+    end
+    box 💾 Infrastructure Components
+        participant StateStore as 💾 StateStore
+        participant HistoryStore as 📜 HistoryStore
+        participant RuntimeFactories as ⚙️ Runtime Factories
+    end
 
-title 🌱 CLI Initialization Flow - Component Grouped
+    Note over User,CLI: === Configuration Phase ===
+    User->>+CLI: Execute `oasmock mock --from ...`
+    CLI->>CLI: Parse flags & config (viper)
+    CLI-->>User: Validate configuration
 
-actor "👤 User" as User
+    Note over CLI,Loader: === Schema Loading ===
+    CLI->>+Loader: LoadSchemas(sources, prefixes)
+    loop for each source
+        Loader->>Loader: loadSingleSchema()
+        Loader->>Loader: openapi3.NewLoader().LoadFromData()
+        Loader->>Loader: spec.Validate()
+    end
+    Loader-->>-CLI: []loader.SchemaInfo
 
-box "🎯 CLI Component" #E8F5E9 /'source: @/cmd/oasmock'/
-  participant "🖥️ CLI\n(cmd/oasmock)" as CLI /'source: @/cmd/oasmock/root.go:46'/
-end box
+    Note over CLI,ServerNew: === Server Initialization ===
+    CLI->>+ServerNew: New(config, schemas)
+    ServerNew->>ServerNew: Convert schemas to server.SchemaInfo
+    ServerNew->>ServerNew: Create default dependencies
+    ServerNew->>+RouteProvider: BuildRouteMappings(schemas)
+    RouteProvider->>RouteProvider: Process OpenAPI paths/operations
+    RouteProvider-->>-ServerNew: []server.RouteMapping
+    ServerNew->>StateStore: Initialize state manager
+    ServerNew->>HistoryStore: Initialize ring buffer
+    ServerNew->>RuntimeFactories: Create data source factories
+    ServerNew->>ServerNew: Initialize routeMap, onceExamples
+    ServerNew->>ServerNew: setupRouter() with middleware
+    ServerNew-->>-CLI: *Server instance
 
-box "🛠️ Loader Component" #FFF8E1 /'source: @/internal/loader'/
-  participant "📚 loader.LoadSchemas" as Loader /'source: @/internal/loader/schema.go:20'/
-end box
-
-box "⚙️ Server Component" #E3F2FD /'source: @/internal/server'/
-  participant "🏗️ server.New" as ServerNew /'source: @/internal/server/server.go:101'/
-  participant "🔧 RouteProvider" as RouteProvider /'source: @/internal/server/interfaces.go:13'/
-  participant "🚀 Server.Start" as ServerStart /'source: @/internal/server/server.go:447'/
-  participant "🌐 http.Server" as HTTPServer
-end box
-
-box "💾 Infrastructure Components" #E0F2F1 /'source: @/internal'/
-  participant "💾 StateStore" as StateStore /'source: @/internal/server/interfaces.go:37'/
-  participant "📜 HistoryStore" as HistoryStore /'source: @/internal/server/interfaces.go:55'/
-  participant "⚙️ Runtime Factories" as RuntimeFactories /'source: @/internal/server/interfaces.go:97'/
-end box
-
-== Configuration Phase ==
-
-User -> CLI ++ : Execute `oasmock mock --from ...`
-CLI -> CLI : Parse flags & config (viper)
-CLI --> User : Validate configuration
-
-== Schema Loading ==
-
-CLI -> Loader ++ : LoadSchemas(sources, prefixes)
-loop for each source
-  Loader -> Loader : loadSingleSchema()
-  Loader -> Loader : openapi3.NewLoader().LoadFromData()
-  Loader -> Loader : spec.Validate()
-end
-Loader --> CLI -- : []loader.SchemaInfo
-
-== Server Initialization ==
-
-CLI -> ServerNew ++ : New(config, schemas)
-ServerNew -> ServerNew : Convert schemas to server.SchemaInfo
-ServerNew -> ServerNew : Create default dependencies
-
-ServerNew -> RouteProvider ++ : BuildRouteMappings(schemas)
-RouteProvider -> RouteProvider : Process OpenAPI paths/operations
-RouteProvider --> ServerNew -- : []server.RouteMapping
-
-ServerNew -> StateStore : Initialize state manager
-ServerNew -> HistoryStore : Initialize ring buffer
-ServerNew -> RuntimeFactories : Create data source factories
-
-ServerNew -> ServerNew : Initialize routeMap, onceExamples
-ServerNew -> ServerNew : setupRouter() with middleware
-ServerNew --> CLI -- : *Server instance
-
-== Server Startup ==
-
-CLI -> ServerStart ++ : Start() (goroutine)
-ServerStart -> HTTPServer ++ : ListenAndServe()
-HTTPServer --> ServerStart -- : Listening on port
-ServerStart --> CLI -- : Server running
-
-CLI -> CLI : Wait for interrupt signal
-CLI --> User -- : Server ready message
-
-caption Figure 2: CLI startup sequence
-
-@enduml
+    Note over CLI,HTTPServer: === Server Startup ===
+    CLI->>+ServerStart: Start() (goroutine)
+    ServerStart->>+HTTPServer: ListenAndServe()
+    HTTPServer-->>-ServerStart: Listening on port
+    ServerStart-->>-CLI: Server running
+    CLI->>CLI: Wait for interrupt signal
+    CLI-->>-User: Server ready message
 ```
+
+*Figure 2: CLI startup sequence*
 
 **Description**:
 1. **User Interaction**: CLI component parses command-line arguments and validates configuration
@@ -524,123 +380,72 @@ caption Figure 2: CLI startup sequence
 
 ### 3.2 HTTP Mock Request Flow
 
-```plantuml
-@startuml http-mock-request-sequence-grouped
-!theme bluegray
-autonumber "<b>[000]"
+```mermaid
+sequenceDiagram
+    autonumber
 
-<style>
-sequenceDiagram {
-  actor {
-    BackgroundColor #E8F5E9
-    BorderColor #2E7D32
-  }
-  participant {
-    BackgroundColor #E3F2FD
-    BorderColor #1565C0
-    FontColor #0D47A1
-  }
-  control {
-    BackgroundColor #FFF3E0
-    BorderColor #F57C00
-    FontColor #E65100
-  }
-  entity {
-    BackgroundColor #F3E5F5
-    BorderColor #7B1FA2
-    FontColor #4A148C
-  }
-  arrow {
-    LineColor #616161
-    LineThickness 1.5
-  }
-}
-</style>
+    actor Client as 👤 HTTP Client
+    box ⚙️ Server Component
+        participant Router as 🛣️ Server Router
+        participant Mapping as 📍 RouteMapping
+        participant ResponseGen as 📄 Response Generator
+    end
+    box 🔧 Runtime Component
+        participant Evaluator as ⚡ Runtime.Evaluator
+        participant RequestSource as 📤 RequestSource
+        participant StateSource as 💾 StateSource
+        participant EnvSource as 🌍 EnvSource
+    end
+    box 🔌 Extensions Component
+        participant ExtProcessor as 🔌 ExtensionProcessor
+    end
 
-title 🌐 HTTP Mock Request Flow - Component Grouped
+    Note over Client,Router: === Request Reception & Middleware ===
+    Client->>+Router: GET /v1/users/123
+    Router->>Router: Middleware stack execution
 
-actor "👤 HTTP Client" as Client
+    Note over Router,Mapping: === Route Lookup ===
+    Router->>+Mapping: Route lookup via routeKey()
+    Mapping-->>-Router: RouteMapping struct
 
-box "⚙️ Server Component" #E3F2FD /'source: @/internal/server'/
-  participant "🛣️ Server Router" as Router /'source: @/internal/server/server.go:286'/
-  entity "📍 RouteMapping" as Mapping /'source: @/internal/server/interfaces.go:19'/
-  participant "📄 Response Generator" as ResponseGen /'source: @/internal/server/server_example.go:95'/
-end box
+    Note over Router,Evaluator: === Runtime Environment Setup ===
+    Router->>+Evaluator: runtime.NewEvaluator()
+    Evaluator->>+RequestSource: AddSource("request", source)
+    RequestSource->>RequestSource: Parse path/query/headers/body
+    RequestSource-->>-Evaluator: DataSource ready
+    Evaluator->>+StateSource: AddSource("state", source)
+    StateSource->>StateSource: Get namespace data
+    StateSource-->>-Evaluator: DataSource ready
+    Evaluator->>+EnvSource: AddSource("env", source)
+    EnvSource->>EnvSource: Read OS environment
+    EnvSource-->>-Evaluator: DataSource ready
+    Evaluator-->>-Router: Configured evaluator
 
-box "🔧 Runtime Component" #F3E5F5 /'source: @/internal/runtime'/
-  participant "⚡ Runtime.Evaluator" as Evaluator /'source: @/internal/runtime/expression.go:180'/
-  participant "📤 RequestSource" as RequestSource /'source: @/internal/runtime/expression.go:77'/
-  participant "💾 StateSource" as StateSource /'source: @/internal/runtime/expression.go:134'/
-  participant "🌍 EnvSource" as EnvSource /'source: @/internal/runtime/expression.go:162'/
-end box
+    Note over Router,Router: === Response Selection & Processing ===
+    Router->>Router: selectResponse(mapping, evaluator)
+    Router->>Router: selectMediaType(response)
+    Router->>Router: selectDynamicExample() / selectExample()
 
-box "🔌 Extensions Component" #FFF3E0 /'source: @/internal/extensions'/
-  control "🔌 ExtensionProcessor" as ExtProcessor /'source: @/internal/server/interfaces.go:123'/
-end box
+    Router->>+ExtProcessor: ExtractSetState(example)
+    ExtProcessor-->>Router: map[string]any
+    Router->>ExtProcessor: ExtractParamsMatch(example)
+    ExtProcessor-->>Router: ParamsMatch
+    Router->>ExtProcessor: EvaluateParamsMatch(params, evaluator)
+    ExtProcessor->>ExtProcessor: Evaluate runtime expressions
+    ExtProcessor-->>-Router: bool match result
 
-== Request Reception & Middleware ==
+    Note over Router,ResponseGen: === Response Generation ===
+    Router->>+ResponseGen: generateResponse(example, evaluator)
+    ResponseGen->>ResponseGen: Evaluate runtime expressions
+    ResponseGen->>ResponseGen: Apply state updates via StateStore
+    ResponseGen-->>-Router: body, headers, statusCode
 
-Client -> Router ++ : GET /v1/users/123
-Router -> Router : Middleware stack execution
-
-== Route Lookup ==
-
-Router -> Mapping ++ : Route lookup via routeKey()
-Mapping --> Router -- : RouteMapping struct
-
-== Runtime Environment Setup ==
-
-Router -> Evaluator ++ : runtime.NewEvaluator()
-Evaluator -> RequestSource ++ : AddSource("request", source)
-RequestSource -> RequestSource : Parse path/query/headers/body
-RequestSource --> Evaluator -- : DataSource ready
-
-Evaluator -> StateSource ++ : AddSource("state", source)
-StateSource -> StateSource : Get namespace data
-StateSource --> Evaluator -- : DataSource ready
-
-Evaluator -> EnvSource ++ : AddSource("env", source)
-EnvSource -> EnvSource : Read OS environment
-EnvSource --> Evaluator -- : DataSource ready
-
-Evaluator --> Router -- : Configured evaluator
-
-== Response Selection & Processing ==
-
-group Response Selection
-  Router -> Router : selectResponse(mapping, evaluator)
-  Router -> Router : selectMediaType(response)
-  Router -> Router : selectDynamicExample() / selectExample()
-end
-
-group Extension Processing
-  Router -> ExtProcessor ++ : ExtractSetState(example)
-  ExtProcessor --> Router : map[string]any
-  
-  Router -> ExtProcessor : ExtractParamsMatch(example)
-  ExtProcessor --> Router : ParamsMatch
-  
-  Router -> ExtProcessor : EvaluateParamsMatch(params, evaluator)
-  ExtProcessor -> ExtProcessor : Evaluate runtime expressions
-  ExtProcessor --> Router -- : bool match result
-end
-
-== Response Generation ==
-
-Router -> ResponseGen ++ : generateResponse(example, evaluator)
-ResponseGen -> ResponseGen : Evaluate runtime expressions
-ResponseGen -> ResponseGen : Apply state updates via StateStore
-ResponseGen --> Router -- : body, headers, statusCode
-
-== Final Response ==
-
-Router -> Client : HTTP Response (200 OK)
-deactivate Router
-
-caption Figure 3: HTTP request handling sequence
-
-@enduml
+    Note over Client,Router: === Final Response ===
+    Router->>Client: HTTP Response (200 OK)
+    deactivate Router
 ```
+
+*Figure 3: HTTP request handling sequence*
 
 **Description**:
 1. **Request Reception**: Server component receives HTTP request and processes middleware
@@ -652,116 +457,63 @@ caption Figure 3: HTTP request handling sequence
 
 ### 3.3 Management API - Dynamic Example Addition
 
-```plantuml
-@startuml management-api-sequence-grouped
-!theme bluegray
-autonumber "<b>[000]"
+```mermaid
+sequenceDiagram
+    autonumber
 
-<style>
-sequenceDiagram {
-  actor {
-    BackgroundColor #E8F5E9
-    BorderColor #2E7D32
-  }
-  participant {
-    BackgroundColor #E3F2FD
-    BorderColor #1565C0
-    FontColor #0D47A1
-  }
-  control {
-    BackgroundColor #FFEBEE
-    BorderColor #C2185B
-    FontColor #B71C1C
-  }
-  database {
-    BackgroundColor #E0F2F1
-    BorderColor #00897B
-    FontColor #004D40
-  }
-  arrow {
-    LineColor #616161
-    LineThickness 1.5
-  }
-  note {
-    BackgroundColor #FFFDE7
-    BorderColor #FBC02D
-    FontColor #F57F17
-  }
-}
-</style>
+    actor Client as 👤 HTTP Client
+    box ⚙️ Server Component
+        participant Router as 🛣️ Server Router
+        participant Validator as ✅ Request Validator
+        participant Mapping as 📍 RouteMapping
+        participant DynStore as ➕ Dynamic Examples Store
+        participant ResponseBuilder as 📤 Response Builder
+    end
 
-title 🛠️ Management API - Dynamic Example Addition
+    Note over Client,Router: === Request Reception ===
+    Client->>+Router: POST /_mock/examples<br/>Content-Type: application/json
+    Router->>Router: Parse JSON body
 
-actor "👤 HTTP Client" as Client
+    Note over Router,Validator: === Request Validation ===
+    Router->>+Validator: validateAddExampleRequest(body)
+    Validator->>Validator: JSON schema validation (gojsonschema)
+    alt Invalid Schema
+        Validator-->>Router: Validation error
+        Router-->>Client: 400 Bad Request<br/>{"error": "..."}
+    else Valid Schema
+        Validator-->>-Router: Validation passed
+    end
 
-box "⚙️ Server Component" #E3F2FD /'source: @/internal/server'/
-  participant "🛣️ Server Router" as Router /'source: @/internal/server/server.go:286'/
-  control "✅ Request Validator" as Validator /'source: @/internal/server/server_management.go:50'/
-  participant "📍 RouteMapping" as Mapping /'source: @/internal/server/interfaces.go:19'/
-  database "➕ Dynamic Examples Store" as DynStore /'source: @/internal/server/server_management.go:177'/
-  participant "📤 Response Builder" as ResponseBuilder /'source: @/internal/server/server.go:35'/
-end box
+    Note over Router,Mapping: === Route Matching ===
+    Router->>+Mapping: Find matching route<br/>(Pattern, Method)
+    Mapping->>Mapping: Search through []RouteMapping
+    alt No Match Found
+        Mapping-->>Router: nil
+        Router-->>Client: 400 No matching route
+    else Match Found
+        Mapping-->>-Router: *RouteMapping
+    end
 
-== Request Reception ==
+    Note over Router,DynStore: === Dynamic Example Creation ===
+    Router->>+DynStore: Create dynamicExample struct
+    DynStore->>DynStore: Parse conditions, response
+    DynStore->>DynStore: Generate unique ID
+    DynStore-->>-Router: dynamicExample ready
 
-Client -> Router ++ : POST /_mock/examples\nContent-Type: application/json
-Router -> Router : Parse JSON body
+    Note over Router,DynStore: === Storage Operation ===
+    Router->>DynStore: Store under routeKey
+    DynStore->>DynStore: Append to examples slice
+    DynStore-->>Router: Success
 
-== Request Validation ==
-
-group Schema Validation
-  Router -> Validator ++ : validateAddExampleRequest(body)
-  Validator -> Validator : JSON schema validation (gojsonschema)
-  
-  alt Invalid Schema
-    Validator --> Router : Validation error
-    Router --> Client : 400 Bad Request\n{"error": "..."}
+    Note over Client,Router: === Success Response ===
+    Router->>+ResponseBuilder: Build success response
+    ResponseBuilder->>ResponseBuilder: JSON encoding
+    ResponseBuilder-->>-Router: Success message
+    Router-->>Client: 200 OK<br/>{"success": true, "id": "dynex-...", "message": "Example added"}
     deactivate Router
-    
-  else Valid Schema
-    Validator --> Router -- : Validation passed
-  end
-end
-
-== Route Matching ==
-
-Router -> Mapping ++ : Find matching route\n(Pattern, Method)
-Mapping -> Mapping : Search through []RouteMapping
-
-alt No Match Found
-  Mapping --> Router : nil
-  Router --> Client : 400 No matching route
-  deactivate Router
-  
-else Match Found
-  Mapping --> Router -- : *RouteMapping
-end
-
-== Dynamic Example Creation ==
-
-Router -> DynStore ++ : Create dynamicExample struct
-DynStore -> DynStore : Parse conditions, response
-DynStore -> DynStore : Generate unique ID
-DynStore --> Router -- : dynamicExample ready
-
-== Storage Operation ==
-
-Router -> DynStore : Store under routeKey
-DynStore -> DynStore : Append to examples slice
-DynStore --> Router : Success
-
-== Success Response ==
-
-Router -> ResponseBuilder ++ : Build success response
-ResponseBuilder -> ResponseBuilder : JSON encoding
-ResponseBuilder --> Router -- : Success message
-Router --> Client : 200 OK\n{"success": true, "id": "dynex-...", "message": "Example added"}
-deactivate Router
-
-caption Figure 4: Dynamic example addition via management API
-
-@enduml
 ```
+
+*Figure 4: Dynamic example addition via management API*
 
 **Description**:
 1. **API Request**: Client sends POST request to management API endpoint
@@ -871,7 +623,7 @@ type EnvSource struct {
 ### 4.3 Extension Functions (`internal/extensions/extract.go`)
 
 ```go
-// ExtractParamsMatch extracts the x-mock-params-match extension
+// ExtractParamsMatch extracts the x-mock-match (or x-mock-params-match) extension from an example.
 func ExtractParamsMatch(ex *openapi3.Example) (ParamsMatch, bool)
 
 // ExtractSkip extracts x-mock-skip extension
@@ -886,7 +638,8 @@ func ExtractSetState(ex *openapi3.Example) (map[string]any, bool)
 // ExtractHeaders extracts x-mock-headers extension
 func ExtractHeaders(ex *openapi3.Example) (map[string]any, bool)
 
-// EvaluateParamsMatch evaluates parameter matching conditions
+// EvaluateParamsMatch evaluates parameter matching conditions.
+// The ParamsMatch type is an alias for map[string]any (defined in extensions/match.go).
 func EvaluateParamsMatch(pm ParamsMatch, eval runtime.Evaluator) (bool, error)
 ```
 
@@ -920,6 +673,13 @@ Management API request → Validation → Route matching → Create dynamic exam
 Store in Server → Future requests can use dynamic example
 ```
 
+### 5.6 JSON-RPC Flow
+```
+JSON-RPC request → RpcProtocol.ParseBody → Per-call dispatch (batch) →
+RouteMapping lookup by procedure name → Expression evaluation →
+Example selection → State / history / response collection
+```
+
 ## 6. Design Patterns
 
 ### 6.1 Dependency Injection
@@ -938,9 +698,10 @@ Store in Server → Future requests can use dynamic example
 - Different data sources and evaluators can be plugged in
 - Extension processing strategies for different x-mock-* extensions
 
-### 6.5 Observer Pattern
-- History tracks all requests/responses
-- State updates observable through management API
+### 6.5 History Tracking / State Exposure
+- History ring buffer tracks all requests/responses for later inspection
+- State is queryable through management API endpoints
+- Middleware-based recording pattern decouples tracking from business logic
 
 ## 7. Testing Architecture
 
@@ -973,6 +734,10 @@ Store in Server → Future requests can use dynamic example
 - Implement `StateStore` or `HistoryStore` interfaces
 - Replace default implementations via `Dependencies`
 
+### 8.4 Custom RPC Protocols
+- Implement `RpcProtocol` interface (`ParseBody`, `ErrorResponse`, `ContentType`)
+- Configure via `x-rpc.protocolType` in the OpenAPI spec
+
 ## 9. Performance Considerations
 
 ### 9.1 Memory Management
@@ -988,17 +753,3 @@ Store in Server → Future requests can use dynamic example
 ### 9.3 Runtime Evaluation
 - Expression caching could be added for performance
 - Simple path parsing algorithm with O(n) complexity
-
-## Conclusion
-
-OASMock follows a clean, modular architecture with clear separation of concerns. The component-based design enables testability, maintainability, and extensibility. Key strengths include:
-
-1. **Modularity**: Clear component boundaries with defined interfaces
-2. **Testability**: Dependency injection and mock generation support
-3. **Extensibility**: Pluggable interfaces for custom implementations
-4. **Performance**: Efficient algorithms and memory management
-5. **Standards Compliance**: Full OpenAPI 3.0 support with extensions
-
-The architecture supports both static OpenAPI-based mocking and dynamic runtime behavior through extensions and the management API.
-
-The server also supports protocol-level routing via `x-rpc`: a single gateway endpoint dispatches requests by procedure name (extracted from the request body), reusing the same example selection, expression evaluation, and extension processing pipeline. See [JSON-RPC Documentation](json-rpc.md) for details.
