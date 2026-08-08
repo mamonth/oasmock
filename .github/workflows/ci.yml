@@ -7,6 +7,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -237,7 +241,14 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-      
+
+      - name: Verify npm authentication
+        run: |
+          echo "Authenticated npm account: $(npm whoami)"
+          echo "Package maintainer: $(npm view oasmock maintainers)"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Create npm package
         run: |
           TAG=${GITHUB_REF#refs/tags/}
@@ -286,7 +297,13 @@ jobs:
       
       - name: Publish to npm
         working-directory: npm-package
-        run: npm publish --access public
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "oasmock@${VERSION}" version >/dev/null 2>&1; then
+            echo "oasmock@${VERSION} is already published, skipping."
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
