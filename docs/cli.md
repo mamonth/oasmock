@@ -17,16 +17,17 @@ oasmock [options]
 | `--from`           | string    | `src/openapi.yaml` | Source OpenAPI schema. Can be specified multiple times.                  |
 | `--prefix`         | string    | `''`               | URI prefix for the schema. Can be specified for each `--from` parameter. |
 | `--port`           | number    | `19191`            | Port to listen on.                                                       |
-| `--delay`          | number    | `0`                | Delay between request and response in milliseconds.                      |
+| `--delay`          | number    | `100`              | Delay between request and response in milliseconds.                      |
 | `--verbose`        | boolean   | `false`            | Enable verbose logging.                                                  |
 | `--nocors`         | boolean   | `false`            | Disable automatic CORS compliance.                                       |
 | `--no-control-api` | boolean   | `false`            | Disable management HTTP API served at _mock/                             |
+| `--history-size`   | number    | `1000`             | Maximum number of requests to keep in history.                           |
 | `--version`, `-v`  | boolean   | `false`            | Show version information and exit.                                       |
 | `--help`, `-h`     | boolean   | `false`            | Show global help and exit.                                               |
 
 ### Environment Variables
 
-All values overridable by they cli options counterparts.
+All values are overridable by their CLI option counterparts.
 
 | Variable                 | Description                         |
 |--------------------------|-------------------------------------|
@@ -34,6 +35,7 @@ All values overridable by they cli options counterparts.
 | `OASMOCK_VERBOSE`        | If `true`, enables verbose logging. |
 | `OASMOCK_NO_CORS`        | If `true`, disables CORS.           |
 | `OASMOCK_NO_CONTROL_API` | Disable management HTTP API.        |
+| `OASMOCK_HISTORY_SIZE`   | Maximum request history size.       |
 
 ### Configuration File
 
@@ -49,25 +51,17 @@ The CLI can read configuration from a `.oasmock.yaml` file in the current workin
 
 | Key               | Type                | Description                                                              |
 |-------------------|---------------------|--------------------------------------------------------------------------|
-| `schema`          | string              | Single OpenAPI schema path. Mutually exclusive with `schemas`.           |
 | `schemas`         | list                | Multiple schemas, each either a string (path) or object with `src` and optional `prefix`. |
 | `port`            | number              | Port to listen on.                                                       |
 | `delay`           | number              | Delay between request and response in milliseconds.                      |
 | `verbose`         | boolean             | Enable verbose logging.                                                  |
 | `nocors`          | boolean             | Disable automatic CORS compliance.                                       |
-| `history-size`    | number              | Maximum number of requests to keep in history.                           |
-| `no-control-api`  | boolean             | Disable the management control API.                                      |
+| `history_size`    | number              | Maximum number of requests to keep in history.                           |
+| `no_control_api`  | boolean             | Disable the management control API.                                      |
 
 **Examples:**
 
-**Single schema:**
-```yaml
-schema: ../some/path/openapi.yaml
-port: 8080
-verbose: true
-```
-
- **Multiple schemas with prefixes:**
+**Multiple schemas with prefixes:**
 ```yaml
 schemas:
   - src: api/v1/openapi.yaml
@@ -76,17 +70,6 @@ schemas:
 port: 8080
 delay: 500
 nocors: true
-```
-
-**All options (single schema):**
-```yaml
-schema: api/openapi.yaml
-port: 9090
-delay: 200
-verbose: true
-nocors: false
-history-size: 100
-no-control-api: false
 ```
 
 ### Examples
@@ -123,5 +106,4 @@ oasmock --nocors
 | 1    | General error                         |
 | 2    | Invalid command‑line arguments        |
 | 3    | Schema loading or validation failed   |
-| 4    | Port already in use                   |
 

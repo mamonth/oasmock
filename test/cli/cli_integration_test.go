@@ -678,7 +678,7 @@ Scenario: Config file present with valid YAML
 When a .oasmock.yaml file exists in the current directory with valid YAML content
 Then the CLI uses the values from the file as defaults (unless overridden by environment variables or CLI flags)
 
-Related spec scenarios: RS.CLI.19, RS.CLI.24
+Related spec scenarios: RS.CLI.19
 */
 func TestCLIConfigFilePresent(t *testing.T) {
 	if testing.Short() {
@@ -700,7 +700,8 @@ func TestCLIConfigFilePresent(t *testing.T) {
 	// Create config file with custom port
 	configContent := `port: 19999
 verbose: true
-schema: test.yaml`
+schemas:
+  - test.yaml`
 	require.NoError(t, os.WriteFile(".oasmock.yaml", []byte(configContent), 0644), "failed to write config file")
 	// Copy test schema to current directory (relative path)
 	schemaPath := filepath.Join(originalWd, "../../test/_shared/resources/test.yaml")
@@ -891,7 +892,8 @@ func TestCLIPrecedenceFlagOverridesConfig(t *testing.T) {
 	require.NoError(t, os.Chdir(tmpDir), "failed to change to temp directory")
 	// Config file sets port 8080
 	configContent := `port: 8080
-schema: test.yaml`
+schemas:
+  - test.yaml`
 	require.NoError(t, os.WriteFile(".oasmock.yaml", []byte(configContent), 0644), "failed to write config file")
 	// Copy test schema
 	schemaPath := filepath.Join(originalWd, "../../test/_shared/resources/test.yaml")
@@ -951,7 +953,8 @@ func TestCLIPrecedenceEnvOverridesConfig(t *testing.T) {
 	require.NoError(t, os.Chdir(tmpDir), "failed to change to temp directory")
 	// Config file sets port 8080
 	configContent := `port: 8080
-schema: test.yaml`
+schemas:
+  - test.yaml`
 	require.NoError(t, os.WriteFile(".oasmock.yaml", []byte(configContent), 0644), "failed to write config file")
 	// Copy test schema
 	schemaPath := filepath.Join(originalWd, "../../test/_shared/resources/test.yaml")
@@ -1086,51 +1089,6 @@ verbose: true`
 	}
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
-}
-
-/*
-Scenario: Invalid schema configuration (both schema and schemas)
-When a .oasmock.yaml file contains both schema and schemas keys
-Then the CLI reports an error and exits with code 2
-
-Related spec scenarios: RS.CLI.26
-*/
-func TestCLIConfigInvalidBothSchemaAndSchemas(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	// Build the binary if not present
-	if _, err := os.Stat("../../bin/oasmock"); os.IsNotExist(err) {
-		t.Skip("binary not found, skipping integration test")
-	}
-	tmpDir := t.TempDir()
-	originalWd, err := os.Getwd()
-	require.NoError(t, err, "failed to get working directory")
-	binaryPath := filepath.Join(originalWd, "../../bin/oasmock")
-	defer os.Chdir(originalWd) //nolint:errcheck
-
-	require.NoError(t, os.Chdir(tmpDir), "failed to change to temp directory")
-	// Config file with both schema and schemas (invalid)
-	configContent := `schema: single.yaml
-schemas:
-  - multi.yaml
-port: 8080`
-	require.NoError(t, os.WriteFile(".oasmock.yaml", []byte(configContent), 0644), "failed to write config file")
-	// Create a dummy schema file
-	require.NoError(t, os.WriteFile("single.yaml", []byte("dummy"), 0644), "failed to write dummy schema")
-
-	// Run oasmock - should exit with error code 2
-	cmd := exec.Command(binaryPath, "mock")
-	output, err := cmd.CombinedOutput()
-	require.Error(t, err, "command should fail with invalid config")
-	// Check exit code (2 = invalid arguments)
-	exitErr, ok := err.(*exec.ExitError)
-	require.True(t, ok, "error should be ExitError")
-	expectedCode := 2 // invalid command-line arguments
-	assert.Equal(t, expectedCode, exitErr.ExitCode(), "expected exit code %d for invalid config, got %d", expectedCode, exitErr.ExitCode())
-	// Error message should indicate the problem
-	outputStr := string(output)
-	assert.Contains(t, outputStr, "cannot specify both 'schema' and 'schemas'", "error message missing expected content: %s", outputStr)
 }
 
 /*

@@ -161,7 +161,7 @@ Given various YAML configuration inputs (valid and invalid)
 When parseSchemaConfig is called
 Then it should parse valid configurations correctly and return appropriate errors for invalid ones
 
-Related spec scenarios: RS.CLI.19, RS.CLI.26, RS.CLI.27
+Related spec scenarios: RS.CLI.19, RS.CLI.27
 */
 func TestParseSchemaConfig(t *testing.T) {
 
@@ -185,18 +185,6 @@ func TestParseSchemaConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "single schema",
-			setup: func(cmd *cobra.Command) {
-				viper.Reset()
-				config = mockConfig{}
-				viper.Set("schema", "custom.yaml")
-			},
-			check: func(t *testing.T) {
-				assert.Equal(t, []string{"custom.yaml"}, config.sources)
-				assert.Equal(t, []string{}, config.prefixes)
-			},
-		},
-		{
 			name: "multiple schemas with mixed formats",
 			setup: func(cmd *cobra.Command) {
 				viper.Reset()
@@ -212,30 +200,11 @@ func TestParseSchemaConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "both schema and schemas present",
-			setup: func(cmd *cobra.Command) {
-				viper.Reset()
-				config = mockConfig{}
-				viper.Set("schema", "single.yaml")
-				viper.Set("schemas", []any{"multi.yaml"})
-			},
-			expectError: true,
-		},
-		{
 			name: "invalid schemas element",
 			setup: func(cmd *cobra.Command) {
 				viper.Reset()
 				config = mockConfig{}
 				viper.Set("schemas", []any{42})
-			},
-			expectError: true,
-		},
-		{
-			name: "invalid schema type",
-			setup: func(cmd *cobra.Command) {
-				viper.Reset()
-				config = mockConfig{}
-				viper.Set("schema", 123)
 			},
 			expectError: true,
 		},
@@ -287,8 +256,7 @@ func TestValidYAMLStructure(t *testing.T) {
 	viper.Reset()
 	config = mockConfig{}
 
-	yamlConfig := `schema: test.yaml
-port: 8080
+	yamlConfig := `port: 8080
 delay: 500
 verbose: true
 nocors: true
@@ -299,7 +267,6 @@ no-control-api: true`
 	require.NoError(t, viper.ReadConfig(bytes.NewBufferString(yamlConfig)))
 
 	// Verify viper can read all keys
-	assert.Equal(t, "test.yaml", viper.GetString("schema"))
 	assert.Equal(t, 8080, viper.GetInt("port"))
 	assert.Equal(t, 500, viper.GetInt("delay"))
 	assert.Equal(t, true, viper.GetBool("verbose"))
@@ -331,7 +298,7 @@ Given configuration values defined in multiple sources (CLI flags, environment v
 When the configuration is resolved
 Then values from higher precedence sources override those from lower precedence sources
 
-Related spec scenarios: RS.CLI.22, RS.CLI.23, RS.CLI.28, RS.CLI.29
+Related spec scenarios: RS.CLI.22, RS.CLI.23, RS.CLI.29
 */
 func TestConfigPrecedence(t *testing.T) {
 	// t.Parallel() - cannot use with t.Setenv
@@ -375,11 +342,12 @@ func TestConfigPrecedence(t *testing.T) {
 		assert.Equal(t, 7070, port, "environment variable should override config file")
 	})
 
-	t.Run("CLI from flag overrides YAML schema", func(t *testing.T) {
+	t.Run("CLI from flag overrides YAML schemas", func(t *testing.T) {
 		viper.Reset()
 		config = mockConfig{}
-		// Simulate config file with schema
-		yamlConfig := `schema: custom.yaml`
+		// Simulate config file with schemas
+		yamlConfig := `schemas:
+  - custom.yaml`
 		viper.SetConfigType("yaml")
 		require.NoError(t, viper.ReadConfig(bytes.NewBufferString(yamlConfig)))
 		// Create command with --from flag set
@@ -395,7 +363,7 @@ func TestConfigPrecedence(t *testing.T) {
 		// Call parseSchemaConfig
 		err := parseSchemaConfig(cmd)
 		require.NoError(t, err)
-		// Should keep flag value, not config file schema
+		// Should keep flag value, not config file schemas
 		assert.Equal(t, []string{"flag.yaml"}, config.sources)
 		assert.Equal(t, []string{}, config.prefixes)
 	})

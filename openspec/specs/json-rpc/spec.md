@@ -54,8 +54,8 @@ The mock server SHALL parse incoming JSON-RPC request bodies according to the pr
 - **THEN** the server parses it as one call with procedure "subtract", params `{"a":10}`, id `1`, HasID=true
 
 #### Scenario RS.JRP.11: Batch parsing
-- **WHEN** a POST body is an array of two JSON-RPC call objects
-- **THEN** the server parses it into two calls with correct fields per element
+- **WHEN** a POST body is an array of two or more JSON-RPC call objects
+- **THEN** the server parses it into same number of calls with correct fields per element
 
 #### Scenario RS.JRP.12: Invalid JSON body
 - **WHEN** the POST body is not valid JSON
@@ -92,8 +92,8 @@ The mock server SHALL route a single JSON-RPC call to the matching operation and
 The mock server SHALL process batch JSON-RPC calls (array body) and return an array of responses.
 
 #### Scenario RS.JRP.19: Batch processing
-- **WHEN** a POST body is an array of two valid calls with different ids and methods
-- **THEN** the response is a JSON array of two response envelopes with matching ids
+- **WHEN** a POST body is an array of two or more valid calls with different ids and methods
+- **THEN** the response is a JSON array of corresponding number of response envelopes with matching ids
 
 #### Scenario RS.JRP.20: Batch with mixed success and error
 - **WHEN** a batch contains one valid method and one unknown method

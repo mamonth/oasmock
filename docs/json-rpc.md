@@ -111,14 +111,14 @@ A single OpenAPI spec can contain both RPC procedures and normal HTTP routes. Pa
 Start the server with a spec containing `x-rpc`:
 
 ```bash
-oasmock mock --schema spec.yaml
+oasmock mock --from spec.yaml
 ```
 
 With a schema prefix:
 
 ```bash
-oasmock mock --schema spec.yaml --prefix /api
+oasmock mock --from spec.yaml --prefix /api
 # Gateway available at POST /api/rpc
 ```
 
-All existing flags (`--port`, `--delay`, `--verbose`, `--cors`, `--history-size`, `--control-api`) work identically with RPC-enabled specs.
+All existing flags (`--port`, `--delay`, `--verbose`, `--nocors`, `--history-size`, `--no-control-api`) work identically with RPC-enabled specs.

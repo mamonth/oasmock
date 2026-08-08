@@ -87,7 +87,7 @@ The CLI SHALL return appropriate exit codes as defined in [cli.md](../../../../c
 - **THEN** the CLI exits with code 1
 
 ### Requirement: Configuration file support
-The CLI SHALL read configuration from a `.oasmock.yaml` file in the current working directory (or user home directory). The configuration file SHALL use simplified schema configuration keys: `schema` (single string) for one schema, `schemas` (list) for multiple schemas. Each element in `schemas` SHALL be either a string (schema path) or an object with `src` and optional `prefix`. Other options SHALL use kebab‑case keys matching CLI flag names (`port`, `delay`, `verbose`, `nocors`, `history‑size`, `no‑control‑api`).
+The CLI SHALL read configuration from a `.oasmock.yaml` file in the current working directory (or user home directory). The configuration file SHALL use the `schemas` list key for schema configuration. Each element in `schemas` SHALL be either a string (schema path) or an object with `src` and optional `prefix`. Other options SHALL use kebab‑case keys matching CLI flag names (`port`, `delay`, `verbose`, `nocors`, `history‑size`, `no‑control‑api`).
 
 #### Scenario RS.CLI.19: Config file present with valid YAML
 - **WHEN** a `.oasmock.yaml` file exists in the current directory with valid YAML content
@@ -109,14 +109,6 @@ The CLI SHALL read configuration from a `.oasmock.yaml` file in the current work
 - **WHEN** a configuration value is defined both in `.oasmock.yaml` and as an environment variable (e.g., `port: 8080` in YAML and `OASMOCK_PORT=7070`)
 - **THEN** the CLI uses the value from the environment variable (unless overridden by a CLI flag)
 
-#### Scenario RS.CLI.24: Single schema configuration
-- **WHEN** a `.oasmock.yaml` file contains:
-  ```yaml
-  schema: ../some/path/openapi.yaml
-  port: 8080
-  ```
-- **THEN** the CLI loads the single schema from the specified path, as if `--from ../some/path/openapi.yaml` were given on the command line
-
 #### Scenario RS.CLI.25: Multiple schemas configuration
 - **WHEN** a `.oasmock.yaml` file contains:
   ```yaml
@@ -127,17 +119,9 @@ The CLI SHALL read configuration from a `.oasmock.yaml` file in the current work
   ```
 - **THEN** the CLI loads both schemas, the first with prefix `/url/prefix` and the second without prefix, as if `--from ../some/path/openapi.yaml --prefix /url/prefix --from ../path/unprefixed.openapi.yaml` were given on the command line
 
-#### Scenario RS.CLI.26: Invalid schema configuration (both schema and schemas)
-- **WHEN** a `.oasmock.yaml` file contains both `schema` and `schemas` keys
-- **THEN** the CLI reports an error and exits with code 2 (invalid command-line arguments)
-
 #### Scenario RS.CLI.27: Invalid schemas list element
 - **WHEN** a `.oasmock.yaml` file contains a `schemas` list with an element that is neither a string nor an object with `src`
 - **THEN** the CLI reports an error and exits with code 2 (invalid command-line arguments)
-
-#### Scenario RS.CLI.28: CLI flag overrides YAML schema configuration
-- **WHEN** a `.oasmock.yaml` file contains `schema: path/to/schema.yaml` and the user runs `oasmock --from other.yaml`
-- **THEN** the CLI loads `other.yaml` (ignoring the YAML schema configuration)
 
 #### Scenario RS.CLI.29: CLI flag overrides YAML schemas configuration
 - **WHEN** a `.oasmock.yaml` file contains `schemas:` list with multiple schemas and the user runs `oasmock --from single.yaml`
