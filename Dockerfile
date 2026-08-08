@@ -5,7 +5,7 @@ ARG TARGETARCH=amd64
 
 WORKDIR /app
 
-COPY oasmock-${TARGETOS}-${TARGETARCH}* /app/oasmock
+COPY --chmod=+x oasmock-${TARGETOS}-${TARGETARCH}* /app/oasmock
 
 EXPOSE 19191
 

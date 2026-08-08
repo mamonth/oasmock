@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Docker image `/app/oasmock` is now marked executable — GitHub artifact downloads strip exec bits, breaking `ENTRYPOINT` in the published image
+
 ### Added
 - Initial release of OASMock - OpenAPI mock server
 - Support for OpenAPI 3.0 schemas with custom extensions

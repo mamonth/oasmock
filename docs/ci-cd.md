@@ -146,8 +146,9 @@ flowchart TD
 **Steps:**
 1. Checkout code
 2. Download binaries artifact into the build context root
-3. Build the Docker image (`docker build -t oasmock:pr-test .`)
-4. Smoke test the image (`docker run --rm oasmock:pr-test --version`)
+3. Make Linux binaries executable (`chmod +x`)
+4. Build the Docker image (`docker build -t oasmock:pr-test .`)
+5. Smoke test the image (`docker run --rm oasmock:pr-test --version`)
 
 **Note:** This job is build-only — no image is pushed to any registry.
 
@@ -164,15 +165,16 @@ flowchart TD
 1. Checkout code with full history
 2. Set up Go 1.23
 3. Download binaries artifact
-4. Create or update GitHub release with all four binaries (handles auto-created drafts)
-5. Set up Node.js for npm publishing
-6. Create npm package structure:
+4. Make Linux binaries executable (`chmod +x`)
+5. Create or update GitHub release with all four binaries (handles auto-created drafts)
+6. Set up Node.js for npm publishing
+7. Create npm package structure:
    - Copy binaries to `npm-package/bin/`
    - Create `install.js` script for platform detection
    - Generate `package.json` from template with version placeholder
    - Copy documentation files (`README.md`, `LICENSE`, `CHANGELOG.md`, `docs/`)
-7. Publish to npm registry
-8. Build and publish Docker image:
+8. Publish to npm registry
+9. Build and publish Docker image:
    - Set up Docker Buildx and QEMU (for multi-platform emulation)
    - Log in to Docker Hub
    - Generate Docker tags from the git tag (`latest`, `vX.Y.Z`, `X.Y`, `X`)

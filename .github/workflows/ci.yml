@@ -150,6 +150,9 @@ jobs:
           name: oasmock-binaries
           path: .
 
+      - name: Make binary executable
+        run: chmod +x oasmock-linux-amd64 oasmock-linux-arm64
+
       - name: Build Docker image
         run: docker build -t oasmock:pr-test .
 
@@ -180,7 +183,10 @@ jobs:
         with:
           name: oasmock-binaries
           path: dist/
-      
+
+      - name: Make binaries executable
+        run: chmod +x dist/oasmock-linux-amd64 dist/oasmock-linux-arm64
+
       - name: Create or update GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
