@@ -120,3 +120,25 @@ Value modifiers can be specified after a `|` sign. Example: `{$request.path.para
 | `$state.someSavedParam`       | State data (set previously with `x-mock-set-state`) | `param saved to state`                         |
 | `$env.ENV_VAR`                | Runtime environment variables                       | `value from env`                           |
 
+## x-rpc
+
+**Location**: OpenAPI document root
+
+**Purpose**: Configures an RPC gateway endpoint for routing calls by body field instead of URL path. Currently supports JSON-RPC 2.0.
+
+**Example**:
+```yaml
+x-rpc:
+  gateway: /rpc
+  protocolType: json-rpc
+  procedure:
+    call: method
+    match: post.operationId
+```
+
+When `x-rpc` is present, all POST operations under the gateway path are treated as RPC procedures. The procedure name is derived from the operation's `operationId`. Requests are dispatched by matching the `method` field in the JSON-RPC request body against the procedure name.
+
+For JSON-RPC contexts, `{$request.body.id}`, `{$request.body.method}`, and `{$request.body.params.*}` expressions evaluate against the individual call object (not the batch array), enabling per-call resolution in batch requests.
+
+See [JSON-RPC Documentation](json-rpc.md) for full details.
+

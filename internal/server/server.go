@@ -80,32 +80,48 @@ type Config struct {
 
 // Server represents the mock HTTP server.
 type Server struct {
-	config       Config
-	router       *chi.Mux
-	httpServer   *http.Server
-	mappings     []RouteMapping
-	stateStore   StateStore
-	historyStore HistoryStore
-	// mapping from method+chiPattern to RouteMapping for quick lookup
-	routeMap map[string]*RouteMapping
-	// track once examples that have been used
-	onceExamples map[string]bool
-	onceMu       sync.RWMutex
-	// dynamic examples added via management API
+	config          Config
+	router          *chi.Mux
+	httpServer      *http.Server
+	mappings        []RouteMapping
+	stateStore      StateStore
+	historyStore    HistoryStore
+	routeMap        map[string]*RouteMapping
+	onceExamples    map[string]bool
+	onceMu          sync.RWMutex
 	dynamicExamples map[string][]dynamicExample
 	dyMu            sync.RWMutex
-	// dependencies
-	deps Dependencies
+	deps            Dependencies
+	rpcHandler      *RpcHandler
+	rpcMappings     []*loader.RpcRouteMapping
+	gatewayPath     string
 }
 
 // New creates a new mock server with the given configuration and loaded schemas.
 func New(config Config, schemas []loader.SchemaInfo) (*Server, error) {
-	// Convert loader.SchemaInfo to server.SchemaInfo
 	serverSchemas := make([]SchemaInfo, len(schemas))
+	rpcConfig := (*loader.RpcConfig)(nil)
 	for i, schema := range schemas {
 		serverSchemas[i] = SchemaInfo{
 			Spec:   schema.Spec,
 			Prefix: schema.Prefix,
+		}
+
+		if rpcConfig == nil {
+			var err error
+			rpcConfig, err = loader.ParseRpcConfig(schema.Spec)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse RPC config: %w", err)
+			}
+		}
+	}
+
+	var rpcMappings []*loader.RpcRouteMapping
+	if rpcConfig != nil {
+		var err error
+		rpcMappings, err = loader.BuildRpcMappings(schemas, rpcConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build RPC mappings: %w", err)
 		}
 	}
 
@@ -130,11 +146,11 @@ func New(config Config, schemas []loader.SchemaInfo) (*Server, error) {
 		ExtensionProcessor:   &extensionsProcessorWrapper{},
 	}
 
-	return NewWithDependencies(config, serverSchemas, deps)
+	return NewWithDependencies(config, serverSchemas, deps, rpcConfig, rpcMappings)
 }
 
 // NewWithDependencies creates a new mock server with explicit dependencies.
-func NewWithDependencies(config Config, schemas []SchemaInfo, deps Dependencies) (*Server, error) {
+func NewWithDependencies(config Config, schemas []SchemaInfo, deps Dependencies, rpcConfig *loader.RpcConfig, rpcMappings []*loader.RpcRouteMapping) (*Server, error) {
 	// Build route mappings
 	mappings, err := deps.RouteProvider.BuildRouteMappings(schemas)
 	if err != nil {
@@ -155,7 +171,39 @@ func NewWithDependencies(config Config, schemas []SchemaInfo, deps Dependencies)
 		routeMap:        make(map[string]*RouteMapping),
 		onceExamples:    make(map[string]bool),
 		dynamicExamples: make(map[string][]dynamicExample),
+		rpcMappings:     rpcMappings,
 	}
+
+	if rpcConfig != nil {
+		proto, err := newRpcProtocol(rpcConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create RPC protocol: %w", err)
+		}
+
+		gwPath := rpcConfig.Gateway
+		for _, schema := range schemas {
+			gwPath = applyPrefixRpc(schema.Prefix, rpcConfig.Gateway)
+			break
+		}
+
+		procMap := make(map[string]*RouteMapping)
+		for _, m := range rpcMappings {
+			rm := &RouteMapping{
+				Method:     m.Method,
+				Path:       m.Path,
+				Pattern:    m.Pattern,
+				Prefix:     m.Prefix,
+				ChiPattern: m.ChiPattern,
+				Operation:  m.Operation,
+				Parameters: m.Parameters,
+				Responses:  m.Responses,
+			}
+			procMap[m.Procedure] = rm
+		}
+		s.rpcHandler = NewRpcHandler(proto, procMap, s)
+		s.gatewayPath = gwPath
+	}
+
 	s.setupRouter()
 	return s, nil
 }
@@ -200,6 +248,12 @@ func (s *Server) setupRouter() {
 	// Register mock routes
 	s.registerMockRoutes(r)
 
+	// Register RPC gateway route if configured
+	if s.rpcHandler != nil {
+		r.Post(s.gatewayPath, s.rpcHandler.ServeHTTP)
+		slog.Info("Registered RPC gateway", "path", s.gatewayPath, "procedures", len(s.rpcHandler.procedureMap))
+	}
+
 	// Register management API routes
 	if s.config.EnableControlAPI {
 		s.registerManagementRoutes(r)
@@ -212,13 +266,20 @@ func (s *Server) setupRouter() {
 
 func (s *Server) registerMockRoutes(r chi.Router) {
 	slog.Info("registerMockRoutes called", "verbose", s.config.Verbose, "numMappings", len(s.mappings))
+
+	rpcChiPatterns := make(map[string]bool)
+	for _, m := range s.rpcMappings {
+		rpcChiPatterns[m.ChiPattern] = true
+	}
+
 	for i := range s.mappings {
 		mapping := &s.mappings[i]
+		if rpcChiPatterns[mapping.ChiPattern] {
+			continue
+		}
 		key := routeKey(mapping.Method, mapping.ChiPattern)
 		s.routeMap[key] = mapping
 
-		// Register route with chi using Method function
-		// chi.Method registers the route for the specified HTTP method
 		if s.config.Verbose {
 			slog.Info("XXXRegistering route", "method", mapping.Method, "chiPattern", mapping.ChiPattern, "fullPath", mapping.Path, "prefix", mapping.Prefix, "pattern", mapping.Pattern, "responses", mapping.Responses != nil)
 		}
@@ -306,116 +367,110 @@ func (s *Server) handleMockRequestWithMapping(w http.ResponseWriter, r *http.Req
 	if s.config.Verbose {
 		slog.Debug("handleMockRequestWithMapping called", "method", r.Method, "path", r.URL.Path, "mappingPattern", mapping.Pattern)
 	}
-	// 1. Extract path parameters
 	pathParams := s.extractPathParams(r, mapping)
 
-	// 2. Build runtime data sources
-	evaluator := runtime.NewEvaluator()
-	evaluator.AddSource("request", s.newRequestSource(r, pathParams))
-	evaluator.AddSource("state", s.newStateSource(mapping.Prefix))
-	evaluator.AddSource("env", s.newEnvSource())
-
-	// 3. Select response status code
-	if s.config.Verbose {
-		slog.Debug("handleMockRequestWithMapping: selecting response", "mappingResponses", mapping.Responses != nil)
-	}
-	statusCode, response := s.selectResponse(mapping, evaluator)
-	if s.config.Verbose {
-		slog.Debug("handleMockRequestWithMapping: selected response", "statusCode", statusCode, "response", response != nil)
-	}
-	if response == nil {
-		writeJSONError(w, http.StatusInternalServerError, "No response defined for operation")
+	body, headers, statusCodeStr, mediaType, err := s.selectAndGenerateResponse(r, mapping, pathParams, nil)
+	if err != nil {
+		if err == errNoResponse || err == errNoExample {
+			writeJSONError(w, http.StatusInternalServerError, "No response defined for operation")
+			return
+		}
+		if err == errNotImplemented {
+			writeJSONError(w, http.StatusNotImplemented, "No example available")
+			return
+		}
+		writeJSONErrorf(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// 4. Select media type (for now, pick first)
-	var mediaType string
+	for k, v := range headers {
+		w.Header().Set(k, v)
+	}
+	w.Header().Set("Content-Type", mediaType)
+	w.WriteHeader(parseStatusCode(statusCodeStr))
+	if _, writeErr := w.Write(body); writeErr != nil && s.config.Verbose {
+		slog.Debug("Failed to write response body", "err", writeErr)
+	}
+}
+
+var (
+	errNoResponse     = fmt.Errorf("no response")
+	errNotImplemented = fmt.Errorf("not implemented")
+	errNoExample      = fmt.Errorf("no example")
+)
+
+func (s *Server) selectAndGenerateResponse(r *http.Request, mapping *RouteMapping, pathParams map[string]string, callBody any) (body []byte, headers map[string]string, statusCode string, mediaType string, err error) {
+	evaluator := runtime.NewEvaluator()
+	if callBody != nil {
+		evaluator.AddSource("request", s.newRpcRequestSource(r, pathParams, callBody))
+	} else {
+		evaluator.AddSource("request", s.newRequestSource(r, pathParams))
+	}
+	evaluator.AddSource("state", s.newStateSource(mapping.Prefix))
+	evaluator.AddSource("env", s.newEnvSource())
+
+	statusCode, response := s.selectResponse(mapping, evaluator)
+	if response == nil {
+		return nil, nil, "", "", errNoResponse
+	}
+
 	var mediaTypeObj *openapi3.MediaType
-	if response.Content != nil {
-		if s.config.Verbose {
-			slog.Debug("handleMockRequestWithMapping: selecting media type", "responseContent", true)
-		}
+	mediaType = "application/json"
+	if len(response.Content) > 0 {
 		var mtErr error
 		mediaType, mediaTypeObj, mtErr = s.selectMediaType(response)
-		if s.config.Verbose {
-			slog.Debug("handleMockRequestWithMapping: selected media type", "mediaType", mediaType, "mtErr", mtErr)
-		}
 		if mtErr != nil {
-			writeJSONError(w, http.StatusNotImplemented, mtErr.Error())
-			return
-		}
-	} else {
-		// No content defined in schema; we'll use default media type if we have a dynamic example
-		mediaType = "application/json" // default
-		if s.config.Verbose {
-			slog.Debug("handleMockRequestWithMapping: no content in response, using default media type", "mediaType", mediaType)
+			return nil, nil, "", "", mtErr
 		}
 	}
 
-	// Generate operation ID for once-example tracking
 	opID := mapping.Prefix + ":" + mapping.Method + ":" + mapping.Pattern
-	if s.config.Verbose {
-		slog.Debug("handleMockRequestWithMapping: selecting example",
-			"method", mapping.Method,
-			"pattern", mapping.Pattern,
-			"chiPattern", mapping.ChiPattern,
-			"key", routeKey(mapping.Method, mapping.ChiPattern))
-	}
-	// 5. Select example (dynamic first, then built‑in)
+
 	var example *openapi3.Example
 	var dynExample *dynamicExample
-	var exampleKey string
-	dynExample, exampleKey = s.selectDynamicExample(mapping, evaluator)
-	if s.config.Verbose {
-		slog.Debug("handleMockRequestWithMapping: after selectDynamicExample",
-			"dynExample", dynExample != nil,
-			"exampleKey", exampleKey)
-	}
+	dynExample, _ = s.selectDynamicExample(mapping, evaluator)
 	if dynExample == nil {
 		if mediaTypeObj == nil {
-			// No content in schema and no dynamic example matched
-			writeJSONError(w, http.StatusNotImplemented, "No example available")
-			return
+			return nil, nil, "", "", errNotImplemented
 		}
-		example, exampleKey = s.selectExample(mediaTypeObj, evaluator, opID)
-		if s.config.Verbose {
-			slog.Debug("handleMockRequestWithMapping: after selectExample",
-				"example", example != nil,
-				"exampleKey", exampleKey)
-		}
+		example, _ = s.selectExample(mediaTypeObj, evaluator, opID)
 		if example == nil {
-			writeJSONError(w, http.StatusNotImplemented, "No example available")
-			return
+			return nil, nil, "", "", errNotImplemented
 		}
-	}
-	// Log selected example if verbose
-	if s.config.Verbose && exampleKey != "" {
-		slog.Debug("Selected example", "example", exampleKey)
 	}
 
-	// 6. Apply extensions (x-mock-set-state, x-mock-headers, x-mock-once)
 	if example != nil {
 		s.applyExtensions(example, evaluator, mapping.Prefix)
 	}
 
-	// 7. Generate response body and headers
-	body, headers, finalStatusCode, err := s.generateResponse(example, dynExample, evaluator, statusCode)
-	if err != nil {
-		writeJSONErrorf(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	statusCode = finalStatusCode
-
-	// 8. Set response headers
-	for k, v := range headers {
-		w.Header().Set(k, v)
+	body, headers, statusCode, genErr := s.generateResponse(example, dynExample, evaluator, statusCode)
+	if genErr != nil {
+		return nil, nil, "", "", genErr
 	}
 
-	// 9. Send response
-	w.Header().Set("Content-Type", mediaType)
-	w.WriteHeader(parseStatusCode(statusCode))
-	if _, err := w.Write(body); err != nil && s.config.Verbose {
-		slog.Debug("Failed to write response body", "err", err)
+	return body, headers, statusCode, mediaType, nil
+}
+
+func (s *Server) newRpcRequestSource(r *http.Request, pathParams map[string]string, callBody any) *runtime.RequestSource {
+	query := r.URL.Query()
+	queryMap := make(map[string][]string)
+	for k, v := range query {
+		queryMap[k] = v
+	}
+	headers := make(map[string][]string)
+	for k, v := range r.Header {
+		headers[strings.ToLower(k)] = v
+	}
+	cookies := make(map[string]string)
+	for _, c := range r.Cookies() {
+		cookies[c.Name] = c.Value
+	}
+	return &runtime.RequestSource{
+		PathParams:  pathParams,
+		QueryParams: queryMap,
+		Headers:     headers,
+		Body:        callBody,
+		Cookies:     cookies,
 	}
 }
 
@@ -535,4 +590,16 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return s.httpServer.Shutdown(ctx)
 	}
 	return nil
+}
+
+func applyPrefixRpc(prefix, path string) string {
+	if prefix == "" {
+		return path
+	}
+	p := "/" + strings.Trim(prefix, "/")
+	pp := "/" + strings.Trim(path, "/")
+	if pp == "/" {
+		return p
+	}
+	return p + pp
 }

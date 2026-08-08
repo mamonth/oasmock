@@ -1,0 +1,42 @@
+openapi: "3.0.3"
+info:
+  title: RPC + HTTP Coexistence Test
+  version: "1.0"
+x-rpc:
+  gateway: /rpc
+  protocolType: json-rpc
+  procedure:
+    call: method
+    match: post.operationId
+paths:
+  /rpc/hello:
+    post:
+      operationId: hello
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    jsonrpc: "2.0"
+                    result: "hello {$request.body.params.name}"
+                    id: "{$request.body.id}"
+  /users:
+    get:
+      operationId: listUsers
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    users: ["alice", "bob"]

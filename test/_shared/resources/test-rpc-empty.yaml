@@ -1,0 +1,23 @@
+openapi: "3.0.3"
+info:
+  title: JSON-RPC Empty Test API
+  version: "1.0"
+x-rpc:
+  gateway: /rpc
+  protocolType: json-rpc
+  procedure:
+    call: method
+    match: post.operationId
+paths:
+  /rpc/status:
+    get:
+      operationId: status
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    status: ok

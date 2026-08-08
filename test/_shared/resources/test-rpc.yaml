@@ -1,0 +1,187 @@
+openapi: "3.0.3"
+info:
+  title: JSON-RPC Test API
+  version: "1.0"
+x-rpc:
+  gateway: /rpc
+  protocolType: json-rpc
+  procedure:
+    call: method
+    match: post.operationId
+paths:
+  /rpc/subtract:
+    post:
+      operationId: subtract
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    jsonrpc: "2.0"
+                    result: "{$request.body.params.a} - {$request.body.params.b}"
+                    id: "{$request.body.id}"
+  /rpc/add:
+    post:
+      operationId: add
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    jsonrpc: "2.0"
+                    result: "{$request.body.params.a} + {$request.body.params.b} = sum"
+                    id: "{$request.body.id}"
+  /rpc/setState:
+    post:
+      operationId: setState
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  x-mock-set-state:
+                    counter: "{$request.body.params.value}"
+                  value:
+                    jsonrpc: "2.0"
+                    result: ok
+                    id: "{$request.body.id}"
+  /rpc/getState:
+    post:
+      operationId: getState
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    jsonrpc: "2.0"
+                    result: "{$state.counter}"
+                    id: "{$request.body.id}"
+  /rpc/once:
+    post:
+      operationId: once
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                a-first:
+                  x-mock-once: true
+                  value:
+                    jsonrpc: "2.0"
+                    result: once-only
+                    id: "{$request.body.id}"
+                z-fallback:
+                  value:
+                    jsonrpc: "2.0"
+                    result: fallback
+                    id: "{$request.body.id}"
+  /rpc/skip:
+    post:
+      operationId: skip
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                skipped:
+                  x-mock-skip: true
+                  value:
+                    jsonrpc: "2.0"
+                    result: skipped
+                    id: "{$request.body.id}"
+                default:
+                  value:
+                    jsonrpc: "2.0"
+                    result: used
+                    id: "{$request.body.id}"
+  /rpc/headers:
+    post:
+      operationId: headers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  x-mock-headers:
+                    X-Custom-Header: "test-value-{$request.body.id}"
+                    X-Static: static-value
+                  value:
+                    jsonrpc: "2.0"
+                    result: with-headers
+                    id: "{$request.body.id}"
+  /rpc/paramsMatch:
+    post:
+      operationId: paramsMatch
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                admin:
+                  x-mock-params-match:
+                    '{$request.body.params.role}': admin
+                  value:
+                    jsonrpc: "2.0"
+                    result: admin-response
+                    id: "{$request.body.id}"
+                default:
+                  value:
+                    jsonrpc: "2.0"
+                    result: user-response
+                    id: "{$request.body.id}"

@@ -6,10 +6,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 )
+
+var callerCounter atomic.Int64
 
 // registerCaller creates a caller marker and returns its ID.
 func registerCaller(t *testing.T, binDir string) string {
@@ -25,7 +28,7 @@ func registerCaller(t *testing.T, binDir string) string {
 	// Generate unique caller ID: {package}_{pid}_{timestamp}
 	pid := os.Getpid()
 	timestamp := time.Now().Format("20060102T150405")
-	callerID := fmt.Sprintf("test_%d_%s", pid, timestamp)
+	callerID := fmt.Sprintf("test_%d_%s_%d", pid, timestamp, callerCounter.Add(1))
 
 	// Create marker file
 	markerPath := filepath.Join(callersDir, callerID)
@@ -43,8 +46,10 @@ func registerCaller(t *testing.T, binDir string) string {
 	return callerID
 }
 
-// cleanupCaller removes the caller marker and potentially the binary.
-func cleanupCaller(callerID, binDir, binPath, testBuiltPath string, keepBinary bool) {
+// cleanupCaller removes the caller marker.
+// The binary is a process-level resource — it is not deleted per-test
+// to avoid breaking subsequent tests that reuse the same binary.
+func cleanupCaller(callerID, binDir string) {
 	// Remove our caller marker if it exists
 	callerMarkersMu.Lock()
 	markerPath, ok := callerMarkers[callerID]
@@ -59,46 +64,13 @@ func cleanupCaller(callerID, binDir, binPath, testBuiltPath string, keepBinary b
 		}
 	}
 
-	// Check if we should delete the binary
-	if keepBinary {
-		return
-	}
-
-	// Check if binary was test-built
-	if _, err := os.Stat(testBuiltPath); os.IsNotExist(err) {
-		// Not test-built, don't delete
-		return
-	}
-
-	// Check if any callers remain
 	callersDir := filepath.Join(binDir, callersDirName)
-	// Clean up stale markers before checking
-	cleanupStaleMarkers(callersDir)
+	// Remove empty callers directory if no callers remain
 	if dirExists(callersDir) {
 		entries, err := os.ReadDir(callersDir)
-		if err == nil && len(entries) > 0 {
-			// Other callers still exist
-			return
-		}
-	}
-
-	// No callers remain and binary is test-built - delete it
-	if _, err := os.Stat(binPath); err == nil {
-		if err := os.Remove(binPath); err != nil {
-			fmt.Printf("Warning: failed to delete test-built binary %s: %v\n", binPath, err)
-		} else {
-			fmt.Printf("Deleted test-built binary %s\n", binPath)
-		}
-
-		// Also remove test-built marker
-		if err := os.Remove(testBuiltPath); err != nil && !os.IsNotExist(err) {
-			fmt.Printf("Warning: failed to remove test-built marker: %v\n", err)
-		}
-
-		// Remove empty callers directory
-		if dirExists(callersDir) {
+		if err == nil && len(entries) == 0 {
 			if err := os.Remove(callersDir); err != nil && !os.IsNotExist(err) {
-				fmt.Printf("Warning: failed to remove callers directory: %v\n", err)
+				// Silent cleanup
 			}
 		}
 	}
