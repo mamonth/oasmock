@@ -1,0 +1,13 @@
+.git/
+bin/
+mock/
+.idea/
+.opencode/
+*.md
+!README.md
+!LICENSE
+!CHANGELOG.md
+node_modules/
+npm-package/
+*.test
+coverage_report.md

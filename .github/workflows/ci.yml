@@ -90,6 +90,7 @@ jobs:
         run: |
           mkdir -p dist
           GOOS=linux GOARCH=amd64 go build -ldflags="-X 'main.version=${{ steps.version.outputs.version }}'" -o dist/oasmock-linux-amd64 ./cmd/oasmock
+          GOOS=linux GOARCH=arm64 go build -ldflags="-X 'main.version=${{ steps.version.outputs.version }}'" -o dist/oasmock-linux-arm64 ./cmd/oasmock
           GOOS=darwin GOARCH=amd64 go build -ldflags="-X 'main.version=${{ steps.version.outputs.version }}'" -o dist/oasmock-darwin-amd64 ./cmd/oasmock
           GOOS=windows GOARCH=amd64 go build -ldflags="-X 'main.version=${{ steps.version.outputs.version }}'" -o dist/oasmock-windows-amd64.exe ./cmd/oasmock
       
@@ -130,7 +131,27 @@ jobs:
       
       - name: Run integration tests
         run: go test ./test/...
-  
+
+  docker-build:
+    name: Docker Image Build (PR Check)
+    needs: build
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binaries artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: oasmock-binaries
+          path: .
+
+      - name: Build Docker image
+        run: docker build -t oasmock:pr-test .
+
+      - name: Smoke test image
+        run: docker run --rm oasmock:pr-test --version
+
   release:
     name: Create Release
     needs: integration-tests
@@ -139,6 +160,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -174,8 +196,11 @@ jobs:
           
           **Binaries included:**
           - oasmock-linux-amd64 (Linux x86_64)
+          - oasmock-linux-arm64 (Linux arm64)
           - oasmock-darwin-amd64 (macOS x86_64)
           - oasmock-windows-amd64.exe (Windows x86_64)
+          
+          **Docker image:** itmamonth/oasmock (linux/amd64, linux/arm64)
           
           See https://github.com/mamonth/oasmock for documentation.
           EOF
@@ -186,6 +211,7 @@ jobs:
             # Upload binaries to existing release
             gh release upload "$TAG" \
               dist/oasmock-linux-amd64 \
+              dist/oasmock-linux-arm64 \
               dist/oasmock-darwin-amd64 \
               dist/oasmock-windows-amd64.exe \
               --clobber
@@ -201,6 +227,7 @@ jobs:
               --title "$TAG" \
               --notes-file release_notes.md \
               dist/oasmock-linux-amd64 \
+              dist/oasmock-linux-arm64 \
               dist/oasmock-darwin-amd64 \
               dist/oasmock-windows-amd64.exe
           fi
@@ -262,3 +289,38 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: itmamonth/oasmock
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+
+      - name: Copy binaries for Docker build
+        run: cp dist/oasmock-linux-amd64 dist/oasmock-linux-arm64 .
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

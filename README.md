@@ -33,6 +33,23 @@ go install ./cmd/oasmock
 
 Pre‑built binaries for Linux, macOS and Windows are available on the [Releases](https://github.com/mamonth/oasmock/releases) page.
 
+### Docker
+
+```bash
+docker pull itmamonth/oasmock:latest
+```
+
+Run with a mounted `.oasmock.yaml` config and your OpenAPI schemas:
+
+```bash
+docker run -v $(pwd)/.oasmock.yaml:/app/.oasmock.yaml \
+           -v $(pwd)/schemas:/schemas:ro \
+           -p 8080:8080 \
+           itmamonth/oasmock:latest
+```
+
+See [docs/docker.md](./docs/docker.md) for configuration, Docker Compose, image tags, and multi‑platform usage.
+
 ## Quick Start
 
 1. Create an OpenAPI schema (`api.yaml`) with at least one endpoint:
