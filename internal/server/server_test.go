@@ -60,7 +60,7 @@ func newMockedServerWithGeneratedMocks(t *testing.T, config Config) (*Server, *M
 	// Empty schemas since route provider will be mocked
 	schemas := []SchemaInfo{}
 
-	server, err := NewWithDependencies(config, schemas, deps)
+	server, err := NewWithDependencies(config, schemas, deps, nil, nil)
 	require.NoError(t, err, "NewWithDependencies should not error")
 
 	return server, routeProvider, stateStore, historyStore, expressionEvaluator, requestSourceFactory, stateSourceFactory, envSourceFactory, extensionProcessor
@@ -1991,9 +1991,8 @@ Related spec scenarios: RS.MSC.1
 */
 func TestStartAndShutdown(t *testing.T) {
 
-	// Use port 0 to let OS assign a random available port
 	config := Config{
-		Port:             8080,
+		Port:             0,
 		Delay:            0,
 		Verbose:          false,
 		EnableCORS:       true,

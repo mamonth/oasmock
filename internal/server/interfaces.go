@@ -1,6 +1,6 @@
 package server
 
-//go:generate mockgen -destination=interfaces_mock_test.go -package=server . RouteProvider,StateStore,HistoryStore,DataSource,RequestSourceFactory,StateSourceFactory,EnvSourceFactory,ExpressionEvaluator,ExtensionProcessor
+//go:generate mockgen -destination=interfaces_mock_test.go -package=server . RouteProvider,StateStore,HistoryStore,DataSource,RequestSourceFactory,StateSourceFactory,EnvSourceFactory,ExpressionEvaluator,ExtensionProcessor,RpcProtocol
 
 import (
 	"net/http"
@@ -133,6 +133,21 @@ type ExtensionProcessor interface {
 	EvaluateParamsMatch(params map[string]any, eval ExpressionEvaluator) (bool, error)
 	// ExtractHeaders extracts x-mock-headers extension from an example.
 	ExtractHeaders(example *openapi3.Example) (map[string]any, bool)
+}
+
+// RpcProtocol parses RPC request bodies and formats error responses.
+type RpcProtocol interface {
+	ParseBody(body []byte) ([]RpcCall, error)
+	ErrorResponse(code int, message string, id any) []byte
+	ContentType() string
+}
+
+// RpcCall represents a single parsed RPC call.
+type RpcCall struct {
+	Procedure string
+	Raw       any
+	ID        any
+	HasID     bool
 }
 
 // Dependencies holds all dependencies for the Server.

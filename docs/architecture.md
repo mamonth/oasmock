@@ -1000,3 +1000,5 @@ OASMock follows a clean, modular architecture with clear separation of concerns.
 5. **Standards Compliance**: Full OpenAPI 3.0 support with extensions
 
 The architecture supports both static OpenAPI-based mocking and dynamic runtime behavior through extensions and the management API.
+
+The server also supports protocol-level routing via `x-rpc`: a single gateway endpoint dispatches requests by procedure name (extracted from the request body), reusing the same example selection, expression evaluation, and extension processing pipeline. See [JSON-RPC Documentation](json-rpc.md) for details.

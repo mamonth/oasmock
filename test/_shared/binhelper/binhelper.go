@@ -15,12 +15,9 @@ const (
 	// Default environment variable names
 	envSkipBuild   = "OASMOCK_TEST_SKIP_BUILD"
 	envLockTimeout = "OASMOCK_TEST_LOCK_TIMEOUT"
-	envKeepBinary  = "OASMOCK_TEST_KEEP_BINARY"
-
 	// Default values
 	defaultLockTimeout = 30 // seconds
 	defaultSkipBuild   = false
-	defaultKeepBinary  = false
 
 	// File names
 	lockFileName    = ".buildlock"
@@ -69,7 +66,6 @@ func GetBuildedWithConfig(t *testing.T, skipBuildEnvVar string) string {
 	// Get configuration from environment
 	skipBuild := getBoolEnv(skipBuildEnvVar, defaultSkipBuild)
 	lockTimeout := getIntEnv(envLockTimeout, defaultLockTimeout)
-	keepBinary := getBoolEnv(envKeepBinary, defaultKeepBinary)
 
 	// Calculate absolute paths
 	projectRoot, err := getProjectRoot()
@@ -87,7 +83,7 @@ func GetBuildedWithConfig(t *testing.T, skipBuildEnvVar string) string {
 
 	// Ensure cleanup of caller marker
 	t.Cleanup(func() {
-		cleanupCaller(callerID, binDir, binPath, testBuiltPath, keepBinary)
+		cleanupCaller(callerID, binDir)
 	})
 
 	// Check if binary already exists
