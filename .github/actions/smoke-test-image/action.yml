@@ -28,9 +28,19 @@ runs:
       shell: bash
       run: |
         docker rm -f oasmock-smoke >/dev/null 2>&1 || true
-        docker run --rm -d --name oasmock-smoke -p 19191:19191 \
+        docker run -d --name oasmock-smoke -p 19191:19191 \
           -v "$GITHUB_WORKSPACE/api/openapi.yaml:/app/src/openapi.yaml" \
-          "${{ inputs.image-name }}"
-        trap 'docker rm -f oasmock-smoke >/dev/null 2>&1 || true' EXIT
-        sleep 2
-        curl -sf http://localhost:19191/_mock/requests
+          "${{ inputs.image-name }}" >/dev/null
+        for _ in $(seq 1 15); do
+          if curl -sf http://localhost:19191/_mock/requests >/dev/null 2>&1; then
+            echo "Smoke test passed: server serving control API on :19191"
+            docker rm -f oasmock-smoke >/dev/null 2>&1 || true
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "ERROR: smoke test failed - server did not serve the control API on :19191 within 15s"
+        echo "--- container logs ---"
+        docker logs oasmock-smoke 2>&1 || true
+        docker rm -f oasmock-smoke >/dev/null 2>&1 || true
+        exit 1

@@ -31,6 +31,12 @@ func TestLoadSingleSchema(t *testing.T) {
 			errContains: "",
 		},
 		{
+			name:        "control API OpenAPI YAML",
+			path:        "../../api/openapi.yaml",
+			wantErr:     false,
+			errContains: "",
+		},
+		{
 			name:        "non-existent file",
 			path:        "non-existent.yaml",
 			wantErr:     true,

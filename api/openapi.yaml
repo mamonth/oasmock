@@ -137,6 +137,7 @@ components:
             - type: boolean
             - type: object
             - type: array
+              items: {}
           description: Response body (JSON or text)
     AddExampleResponse:
       type: object
@@ -165,6 +166,7 @@ components:
             - type: string
             - type: object
             - type: array
+              items: {}
           description: Request body (parsed if JSON)
         headers:
           type: object
