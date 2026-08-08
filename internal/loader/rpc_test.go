@@ -401,6 +401,46 @@ x-rpc:
 }
 
 /*
+Scenario: BuildRpcMappings returns empty when no POST operations under gateway
+Given schema infos with gateway /rpc but only GET operations under it
+When BuildRpcMappings is called
+Then it returns no mappings and no error
+
+Related spec scenarios: RS.JRP.9
+*/
+func TestBuildRpcMappings_NoPostUnderGateway(t *testing.T) {
+	t.Parallel()
+
+	yaml := `openapi: "3.0.3"
+info:
+  title: Test
+  version: "1.0"
+paths:
+  /rpc/status:
+    get:
+      operationId: status
+      responses:
+        "200":
+          description: OK
+x-rpc:
+  gateway: /rpc
+  protocolType: json-rpc
+  procedure:
+    call: method
+    match: post.operationId
+`
+	spec := specFromYAML(yaml)
+
+	cfg, err := ParseRpcConfig(spec)
+	require.NoError(t, err)
+
+	infos := []SchemaInfo{{Spec: spec, Prefix: ""}}
+	mappings, err := BuildRpcMappings(infos, cfg)
+	require.NoError(t, err)
+	assert.Empty(t, mappings)
+}
+
+/*
 Scenario: BuildRpcMappings applies schema prefix to gateway path
 Given schema infos with prefix /api and gateway /rpc
 When BuildRpcMappings is called

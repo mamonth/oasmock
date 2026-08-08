@@ -37,7 +37,7 @@ func TestRpcSingleCall(t *testing.T) {
 	body := `{"jsonrpc":"2.0","method":"subtract","params":{"a":"10","b":"3"},"id":1}`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(body))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -80,7 +80,7 @@ func TestRpcBatchMixed(t *testing.T) {
 	body := `[{"jsonrpc":"2.0","method":"add","params":{"a":1,"b":2},"id":1},{"jsonrpc":"2.0","method":"unknown","id":2},{"jsonrpc":"2.0","method":"add","params":{"a":3,"b":4}}]`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(body))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -137,14 +137,14 @@ func TestRpcNotificationState(t *testing.T) {
 	notifyBody := `{"jsonrpc":"2.0","method":"setState","params":{"value":"42"}}`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(notifyBody))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	// Verify state via another procedure
 	checkBody := `{"jsonrpc":"2.0","method":"getState","id":1}`
 	resp2, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(checkBody))
 	require.NoError(t, err)
-	defer resp2.Body.Close()
+	defer resp2.Body.Close() //nolint:errcheck
 
 	var result map[string]interface{}
 	err = json.NewDecoder(resp2.Body).Decode(&result)
@@ -183,12 +183,55 @@ func TestRpcMethodNotFound(t *testing.T) {
 	body := `{"jsonrpc":"2.0","method":"nonexistent","id":99}`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(body))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	var result map[string]interface{}
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	require.NoError(t, err)
 	assert.Equal(t, float64(99), result["id"])
+	assert.Equal(t, float64(-32601), result["error"].(map[string]interface{})["code"])
+	assert.Contains(t, result["error"].(map[string]interface{})["message"], "not found")
+
+	select {
+	case err := <-errCh:
+		if err != nil && err.Error() != "signal: terminated" {
+			t.Logf("server process exited with error: %v", err)
+		}
+	default:
+	}
+}
+
+/*
+Scenario: RPC gateway with no POST operations starts with empty procedure map
+Given a schema with x-rpc gateway but only GET operations under it
+When a JSON-RPC call is sent to the gateway
+Then the server starts successfully and returns method-not-found for any procedure
+
+Related spec scenarios: RS.JRP.9
+*/
+func TestRpcNoProcedures(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	cmd, errCh, port := clihelper.Cmd(t).SetSchema("../_shared/resources/test-rpc-empty.yaml", "").Run()
+	defer clihelper.StopServer(t, cmd)
+
+	if !clihelper.WaitForServer(t, port, 2*time.Second) {
+		t.Fatal("server did not start within timeout")
+	}
+
+	body := `{"jsonrpc":"2.0","method":"anything","id":1}`
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), result["id"])
 	assert.Equal(t, float64(-32601), result["error"].(map[string]interface{})["code"])
 	assert.Contains(t, result["error"].(map[string]interface{})["message"], "not found")
 
@@ -224,7 +267,7 @@ func TestRpcParseError(t *testing.T) {
 	body := `not json`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(body))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	raw, _ := io.ReadAll(resp.Body)
 	t.Logf("parse error response: %s", string(raw))
@@ -267,7 +310,7 @@ func TestRpcCoexistence(t *testing.T) {
 	rpcBody := `{"jsonrpc":"2.0","method":"hello","params":{"name":"World"},"id":1}`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(rpcBody))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	var rpcResult map[string]interface{}
 	err = json.NewDecoder(resp.Body).Decode(&rpcResult)
@@ -277,7 +320,7 @@ func TestRpcCoexistence(t *testing.T) {
 	// Test HTTP endpoint
 	httpResp, err := http.Get(fmt.Sprintf("http://localhost:%d/users", port))
 	require.NoError(t, err)
-	defer httpResp.Body.Close()
+	defer httpResp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, httpResp.StatusCode)
 
 	var httpResult map[string]interface{}
@@ -317,7 +360,7 @@ func TestRpcWithPrefix(t *testing.T) {
 	body := `{"jsonrpc":"2.0","method":"hello","params":{"name":"Prefix"},"id":1}`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/api/rpc", port), "application/json", strings.NewReader(body))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	var result map[string]interface{}
 	err = json.NewDecoder(resp.Body).Decode(&result)
@@ -358,7 +401,7 @@ func TestRpcOnceExample(t *testing.T) {
 	// First call
 	resp1, err := http.Post(url, "application/json", strings.NewReader(body))
 	require.NoError(t, err)
-	defer resp1.Body.Close()
+	defer resp1.Body.Close() //nolint:errcheck
 
 	var r1 map[string]interface{}
 	err = json.NewDecoder(resp1.Body).Decode(&r1)
@@ -368,7 +411,7 @@ func TestRpcOnceExample(t *testing.T) {
 	// Second call
 	resp2, err := http.Post(url, "application/json", strings.NewReader(body))
 	require.NoError(t, err)
-	defer resp2.Body.Close()
+	defer resp2.Body.Close() //nolint:errcheck
 
 	var r2 map[string]interface{}
 	err = json.NewDecoder(resp2.Body).Decode(&r2)
@@ -407,7 +450,7 @@ func TestRpcSkipExample(t *testing.T) {
 	body := `{"jsonrpc":"2.0","method":"skip","id":1}`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(body))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	var result map[string]interface{}
 	err = json.NewDecoder(resp.Body).Decode(&result)
@@ -447,7 +490,7 @@ func TestRpcHeaders(t *testing.T) {
 	body := `{"jsonrpc":"2.0","method":"headers","id":42}`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(body))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	assert.Equal(t, "test-value-42", resp.Header.Get("X-Custom-Header"))
 	assert.Equal(t, "static-value", resp.Header.Get("X-Static"))
@@ -487,7 +530,7 @@ func TestRpcParamsMatch(t *testing.T) {
 	adminBody := `{"jsonrpc":"2.0","method":"paramsMatch","params":{"role":"admin"},"id":1}`
 	resp1, err := http.Post(url, "application/json", strings.NewReader(adminBody))
 	require.NoError(t, err)
-	defer resp1.Body.Close()
+	defer resp1.Body.Close() //nolint:errcheck
 
 	var r1 map[string]interface{}
 	err = json.NewDecoder(resp1.Body).Decode(&r1)
@@ -498,7 +541,7 @@ func TestRpcParamsMatch(t *testing.T) {
 	userBody := `{"jsonrpc":"2.0","method":"paramsMatch","params":{"role":"user"},"id":2}`
 	resp2, err := http.Post(url, "application/json", strings.NewReader(userBody))
 	require.NoError(t, err)
-	defer resp2.Body.Close()
+	defer resp2.Body.Close() //nolint:errcheck
 
 	var r2 map[string]interface{}
 	err = json.NewDecoder(resp2.Body).Decode(&r2)

@@ -416,7 +416,7 @@ func (s *Server) selectAndGenerateResponse(r *http.Request, mapping *RouteMappin
 
 	var mediaTypeObj *openapi3.MediaType
 	mediaType = "application/json"
-	if response.Content != nil && len(response.Content) > 0 {
+	if len(response.Content) > 0 {
 		var mtErr error
 		mediaType, mediaTypeObj, mtErr = s.selectMediaType(response)
 		if mtErr != nil {

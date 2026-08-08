@@ -25,13 +25,20 @@ func NewRpcHandler(protocol RpcProtocol, procedureMap map[string]*RouteMapping, 
 	}
 }
 
+// writeBody writes the response body, logging a debug message on failure.
+func writeBody(w http.ResponseWriter, body []byte) {
+	if _, err := w.Write(body); err != nil {
+		slog.Debug("Failed to write RPC response body", "err", err)
+	}
+}
+
 func (h *RpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
 	if err != nil {
 		errBody := h.protocol.ErrorResponse(-32700, "Parse error", nil)
 		w.Header().Set("Content-Type", h.protocol.ContentType())
 		w.WriteHeader(http.StatusOK)
-		w.Write(errBody)
+		writeBody(w, errBody)
 		return
 	}
 
@@ -42,7 +49,7 @@ func (h *RpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		errBody := h.protocol.ErrorResponse(-32700, "Parse error", nil)
 		w.Header().Set("Content-Type", h.protocol.ContentType())
 		w.WriteHeader(http.StatusOK)
-		w.Write(errBody)
+		writeBody(w, errBody)
 		return
 	}
 
@@ -86,13 +93,13 @@ func (h *RpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if len(results) == 0 {
 			w.Header().Set("Content-Type", h.protocol.ContentType())
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("[]"))
+			writeBody(w, []byte("[]"))
 			return
 		}
 		out, _ := json.Marshal(results)
 		w.Header().Set("Content-Type", h.protocol.ContentType())
 		w.WriteHeader(http.StatusOK)
-		w.Write(out)
+		writeBody(w, out)
 		return
 	}
 
@@ -106,7 +113,7 @@ func (h *RpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		errBody := h.protocol.ErrorResponse(-32603, "Internal error", nil)
 		w.Header().Set("Content-Type", h.protocol.ContentType())
 		w.WriteHeader(http.StatusOK)
-		w.Write(errBody)
+		writeBody(w, errBody)
 		return
 	}
 
@@ -119,7 +126,7 @@ func (h *RpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sc = http.StatusOK
 	}
 	w.WriteHeader(sc)
-	w.Write(results[0])
+	writeBody(w, results[0])
 }
 
 func isBatchRequest(body []byte) bool {
