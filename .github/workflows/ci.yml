@@ -91,6 +91,8 @@ jobs:
           fi
       
       - name: Cross-compile binaries
+        env:
+          CGO_ENABLED: "0"
         run: |
           mkdir -p dist
           GOOS=linux GOARCH=amd64 go build -ldflags="-X 'main.version=${{ steps.version.outputs.version }}'" -o dist/oasmock-linux-amd64 ./cmd/oasmock
@@ -153,11 +155,13 @@ jobs:
       - name: Make binary executable
         run: chmod +x oasmock-linux-amd64 oasmock-linux-arm64
 
-      - name: Build Docker image
-        run: docker build -t oasmock:pr-test .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Smoke test image
-        run: docker run --rm oasmock:pr-test --version
+        uses: ./.github/actions/smoke-test-image
+        with:
+          image-name: oasmock:pr-test
 
   release:
     name: Create Release
@@ -339,6 +343,11 @@ jobs:
       - name: Copy binaries for Docker build
         run: cp dist/oasmock-linux-amd64 dist/oasmock-linux-arm64 .
 
+      - name: Smoke test image
+        uses: ./.github/actions/smoke-test-image
+        with:
+          image-name: oasmock:smoke-test
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -347,3 +356,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha

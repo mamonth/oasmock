@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Docker image `/app/oasmock` is now marked executable — GitHub artifact downloads strip exec bits, breaking `ENTRYPOINT` in the published image
+- CI-built binaries are now statically linked (`CGO_ENABLED=0`) — previously `linux/amd64` was dynamically linked against glibc, causing `exec /app/oasmock: no such file or directory` in the `distroless/static` image
+- Release Docker image is now smoke-tested (starts and serves the control API) before it is pushed to Docker Hub, via a shared `smoke-test-image` action also used by the PR `docker-build` check
 
 ### Added
 - Initial release of OASMock - OpenAPI mock server

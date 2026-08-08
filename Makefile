@@ -31,10 +31,10 @@ build:
 
 # Cross-compile for all platforms
 build-cross:
-	GOOS=linux GOARCH=amd64 go build -o bin/oasmock-linux-amd64 ./cmd/oasmock
-	GOOS=linux GOARCH=arm64 go build -o bin/oasmock-linux-arm64 ./cmd/oasmock
-	GOOS=darwin GOARCH=amd64 go build -o bin/oasmock-darwin-amd64 ./cmd/oasmock
-	GOOS=windows GOARCH=amd64 go build -o bin/oasmock-windows-amd64.exe ./cmd/oasmock
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/oasmock-linux-amd64 ./cmd/oasmock
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o bin/oasmock-linux-arm64 ./cmd/oasmock
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o bin/oasmock-darwin-amd64 ./cmd/oasmock
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o bin/oasmock-windows-amd64.exe ./cmd/oasmock
 
 # Run tests
 test:

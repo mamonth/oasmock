@@ -1,0 +1,36 @@
+name: Smoke Test Docker Image
+description: Build the release Docker image with the same build-push-action configuration used for publishing, load it locally, and verify the mock server starts and serves the control API.
+
+inputs:
+  image-name:
+    description: Local tag for the smoke-test image.
+    required: true
+  platforms:
+    description: Platform(s) to build for local testing (single platform only, since it is loaded into the local daemon).
+    required: false
+    default: linux/amd64
+
+runs:
+  using: composite
+  steps:
+    - name: Build Docker image for smoke test
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: ${{ inputs.platforms }}
+        push: false
+        load: true
+        tags: ${{ inputs.image-name }}
+        cache-from: type=gha
+        cache-to: type=gha
+
+    - name: Smoke test image
+      shell: bash
+      run: |
+        docker rm -f oasmock-smoke >/dev/null 2>&1 || true
+        docker run --rm -d --name oasmock-smoke -p 19191:19191 \
+          -v "$GITHUB_WORKSPACE/api/openapi.yaml:/app/src/openapi.yaml" \
+          "${{ inputs.image-name }}"
+        trap 'docker rm -f oasmock-smoke >/dev/null 2>&1 || true' EXIT
+        sleep 2
+        curl -sf http://localhost:19191/_mock/requests

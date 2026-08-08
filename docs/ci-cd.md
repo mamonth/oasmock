@@ -34,14 +34,13 @@ flowchart TD
 
     subgraph P3b["Docker PR Check"]
         G2[Download Binaries]
-        H2[Build Docker Image]
-        I2[Smoke Test]
+        H2[Build & Smoke Test Image]
     end
 
     subgraph P4["Release Tags Only"]
         G[Create GitHub Release]
         H[Publish npm Package]
-        J[Build & Push Docker Image<br/>linux/amd64 + linux/arm64]
+        J[Smoke Test & Push Docker Image<br/>linux/amd64 + linux/arm64]
     end
 
     A --> C
@@ -51,7 +50,6 @@ flowchart TD
     E --> F
     D --> G2
     G2 --> H2
-    H2 --> I2
     F --> G
     G --> H
     H --> J
@@ -107,7 +105,7 @@ flowchart TD
 1. Checkout code
 2. Set up Go 1.23
 3. Extract version from git tag or describe
-4. Cross-compile with version embedded:
+4. Cross-compile with version embedded and `CGO_ENABLED=0` (statically linked, required for the `distroless/static` runtime):
    - `oasmock-linux-amd64` (Linux x86_64)
    - `oasmock-linux-arm64` (Linux arm64)
    - `oasmock-darwin-amd64` (macOS x86_64)
@@ -147,8 +145,8 @@ flowchart TD
 1. Checkout code
 2. Download binaries artifact into the build context root
 3. Make Linux binaries executable (`chmod +x`)
-4. Build the Docker image (`docker build -t oasmock:pr-test .`)
-5. Smoke test the image (`docker run --rm oasmock:pr-test --version`)
+4. Set up Docker Buildx
+5. Build and smoke test the image (shared `smoke-test-image` action): builds with the same `build-push-action` config as the release push, loads it locally, starts the container and verifies the control API responds on `:19191`
 
 **Note:** This job is build-only — no image is pushed to any registry.
 
@@ -174,12 +172,13 @@ flowchart TD
    - Generate `package.json` from template with version placeholder
    - Copy documentation files (`README.md`, `LICENSE`, `CHANGELOG.md`, `docs/`)
 8. Publish to npm registry
-9. Build and publish Docker image:
+9. Build, smoke test and publish Docker image:
    - Set up Docker Buildx and QEMU (for multi-platform emulation)
    - Log in to Docker Hub
    - Generate Docker tags from the git tag (`latest`, `vX.Y.Z`, `X.Y`, `X`)
    - Copy linux binaries into the build context
-   - Build and push multi-platform image (`linux/amd64`, `linux/arm64`) to `itmamonth/oasmock`
+   - Smoke test the image (shared `smoke-test-image` action) before pushing
+   - Build and push multi-platform image (`linux/amd64`, `linux/arm64`) to `itmamonth/oasmock`, reusing the smoke-tested layers via GHA build cache
 
 **Secrets Required:**
 - `GITHUB_TOKEN` (auto-provided by GitHub Actions)
@@ -265,6 +264,7 @@ The pipeline uses these Makefile targets:
 4. **Integration Tests**: All integration tests must pass
 5. **Binary Compatibility**: Binaries must pass integration tests
 6. **Docker Image Build**: The Docker image must build and the packaged binary must start (PR check)
+7. **Docker Image Smoke Test**: The release image must start and serve the control API before it is pushed to Docker Hub
 
 ## Failure Handling
 
@@ -300,6 +300,7 @@ To add support for a new platform (e.g., ARM64):
 ## Related Files
 
 - `.github/workflows/ci.yml` - Main pipeline definition
+- `.github/actions/smoke-test-image/action.yml` - Shared Docker image build + smoke test action
 - `Makefile` - Build and test targets
 - `Dockerfile` - Container image packaging
 - `.dockerignore` - Docker build context exclusions
