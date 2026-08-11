@@ -83,6 +83,9 @@ type Server struct {
 	config          Config
 	router          *chi.Mux
 	httpServer      *http.Server
+	httpMu          sync.Mutex
+	shutdownOnce    sync.Once
+	shutdownResult  error
 	mappings        []RouteMapping
 	stateStore      StateStore
 	historyStore    HistoryStore
@@ -91,6 +94,8 @@ type Server struct {
 	onceMu          sync.RWMutex
 	dynamicExamples map[string][]dynamicExample
 	dyMu            sync.RWMutex
+	sweepCtx        context.Context
+	sweepCancel     context.CancelFunc
 	deps            Dependencies
 	rpcHandler      *RpcHandler
 	rpcMappings     []*loader.RpcRouteMapping
@@ -205,6 +210,9 @@ func NewWithDependencies(config Config, schemas []SchemaInfo, deps Dependencies,
 	}
 
 	s.setupRouter()
+
+	s.sweepCtx, s.sweepCancel = context.WithCancel(context.Background())
+	s.startTTLSweep()
 	return s, nil
 }
 
@@ -577,19 +585,31 @@ func (s *Server) extractPathParams(r *http.Request, mapping *RouteMapping) map[s
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.config.Port)
 	slog.Info("Starting mock server", "address", addr)
+	s.httpMu.Lock()
 	s.httpServer = &http.Server{
 		Addr:    addr,
 		Handler: s.router,
 	}
+	s.httpMu.Unlock()
 	return s.httpServer.ListenAndServe()
 }
 
-// Shutdown gracefully shuts down the server.
+// Shutdown gracefully shuts down the server. It is idempotent: subsequent
+// calls are no-ops that return the result of the first shutdown.
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.httpServer != nil {
-		return s.httpServer.Shutdown(ctx)
+	if s.sweepCancel != nil {
+		s.sweepCancel()
 	}
-	return nil
+	s.httpMu.Lock()
+	hs := s.httpServer
+	s.httpMu.Unlock()
+	if hs == nil {
+		return nil
+	}
+	s.shutdownOnce.Do(func() {
+		s.shutdownResult = hs.Shutdown(ctx)
+	})
+	return s.shutdownResult
 }
 
 func applyPrefixRpc(prefix, path string) string {

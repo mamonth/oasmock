@@ -101,6 +101,10 @@ components:
           type: boolean
           default: false
           description: If true, the example will be returned only once (when conditions are met)
+        ttl:
+          type: integer
+          minimum: 0
+          description: Time-to-live in seconds. After this duration the example becomes unavailable and is removed from memory. 0 or omitted means no expiration.
         validate:
           type: boolean
           default: true

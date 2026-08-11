@@ -63,6 +63,10 @@ func newMockedServerWithGeneratedMocks(t *testing.T, config Config) (*Server, *M
 	server, err := NewWithDependencies(config, schemas, deps, nil, nil)
 	require.NoError(t, err, "NewWithDependencies should not error")
 
+	t.Cleanup(func() {
+		_ = server.Shutdown(context.Background())
+	})
+
 	return server, routeProvider, stateStore, historyStore, expressionEvaluator, requestSourceFactory, stateSourceFactory, envSourceFactory, extensionProcessor
 }
 
@@ -2029,6 +2033,76 @@ func TestStartAndShutdown(t *testing.T) {
 		if err != nil && err != http.ErrServerClosed {
 			assert.NoError(t, err, "Start should return nil or http.ErrServerClosed")
 		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not return after shutdown")
+	}
+}
+
+/*
+Scenario: Concurrent Start and Shutdown must not race on the HTTP server field
+Given a server
+When Start runs in a goroutine while Shutdown is called repeatedly
+Then the server stops gracefully and Start returns http.ErrServerClosed
+And no data race is reported by the race detector
+
+This is a race-regression test: it MUST be run with the race detector
+(`go test -race`). Before the fix, Start assigned s.httpServer without
+synchronization while Shutdown read it, which the race detector flagged
+intermittently. The httpMu mutex in Start/Shutdown removes the race.
+
+Related spec scenarios: RS.MSC.1
+*/
+func TestConcurrentStartAndShutdownNoDataRace(t *testing.T) {
+	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+
+	startErrCh := make(chan error, 1)
+	go func() {
+		startErrCh <- server.Start()
+	}()
+
+	// Hammer Shutdown so reads of s.httpServer overlap with Start's assignment.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_ = server.Shutdown(context.Background())
+	}
+
+	select {
+	case err := <-startErrCh:
+		assert.ErrorIs(t, err, http.ErrServerClosed, "Start should return after shutdown")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after shutdown")
+	}
+}
+
+/*
+Scenario: Shutdown is idempotent
+Given a started server
+When Shutdown is called twice
+Then both calls return nil and only one graceful shutdown occurs
+
+Related spec scenarios: RS.MSC.1
+*/
+func TestShutdownIsIdempotent(t *testing.T) {
+	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+
+	startErrCh := make(chan error, 1)
+	go func() {
+		startErrCh <- server.Start()
+	}()
+
+	// Wait for Start to have assigned httpServer before shutting down.
+	require.Eventually(t, func() bool {
+		server.httpMu.Lock()
+		defer server.httpMu.Unlock()
+		return server.httpServer != nil
+	}, 2*time.Second, 5*time.Millisecond)
+
+	require.NoError(t, server.Shutdown(context.Background()), "first Shutdown should succeed")
+	require.NoError(t, server.Shutdown(context.Background()), "second Shutdown should be a no-op")
+
+	select {
+	case err := <-startErrCh:
+		assert.ErrorIs(t, err, http.ErrServerClosed, "Start should return after shutdown")
 	case <-time.After(2 * time.Second):
 		t.Fatal("Start did not return after shutdown")
 	}

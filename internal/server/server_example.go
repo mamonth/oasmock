@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/mamonth/oasmock/internal/extensions"
@@ -17,12 +18,71 @@ import (
 )
 
 type dynamicExample struct {
+	onceID     string
+	addedAt    time.Time
+	ttl        int
 	once       bool
 	conditions map[string]any
 	response   struct {
 		code    int
 		headers map[string]string
 		body    any
+	}
+}
+
+// isExpired reports whether the example's TTL has elapsed.
+// Examples without a TTL (ttl <= 0) never expire.
+func isExpired(ex dynamicExample) bool {
+	if ex.ttl <= 0 {
+		return false
+	}
+	return !ex.addedAt.Add(time.Duration(ex.ttl) * time.Second).After(time.Now())
+}
+
+const ttlSweepInterval = time.Second
+
+// startTTLSweep launches the background goroutine that periodically removes
+// expired dynamic examples from memory.
+func (s *Server) startTTLSweep() {
+	go func() {
+		ticker := time.NewTicker(ttlSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.sweepCtx.Done():
+				return
+			case <-ticker.C:
+				s.sweepExpiredExamples()
+			}
+		}
+	}()
+}
+
+// sweepExpiredExamples removes expired dynamic examples from storage and
+// cleans up their onceExamples entries.
+func (s *Server) sweepExpiredExamples() {
+	s.dyMu.Lock()
+	defer s.dyMu.Unlock()
+
+	for key, examples := range s.dynamicExamples {
+		kept := make([]dynamicExample, 0, len(examples))
+		for idx, ex := range examples {
+			if !isExpired(ex) {
+				kept = append(kept, ex)
+				continue
+			}
+			s.onceMu.Lock()
+			delete(s.onceExamples, ex.onceID)
+			s.onceMu.Unlock()
+			if s.config.Verbose {
+				slog.Debug("Removed expired dynamic example", "key", key, "idx", idx, "ttl", ex.ttl)
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.dynamicExamples, key)
+		} else {
+			s.dynamicExamples[key] = kept
+		}
 	}
 }
 
@@ -201,13 +261,22 @@ func (s *Server) selectDynamicExample(mapping *RouteMapping, eval runtime.Evalua
 		}
 		// Check once flag
 		if ex.once {
-			onceID := fmt.Sprintf("dynamic:%s:%d", key, idx)
-			if s.isOnceUsed(onceID) {
+			if s.isOnceUsed(ex.onceID) {
 				if s.config.Verbose {
-					slog.Debug("selectDynamicExample: example already used", "onceID", onceID)
+					slog.Debug("selectDynamicExample: example already used", "onceID", ex.onceID)
 				}
 				continue
 			}
+		}
+		// Check TTL expiry
+		if isExpired(ex) {
+			if s.config.Verbose {
+				slog.Debug("selectDynamicExample: example expired",
+					"idx", idx,
+					"ttl", ex.ttl,
+					"addedAt", ex.addedAt)
+			}
+			continue
 		}
 		// Evaluate conditions
 		if len(ex.conditions) > 0 {
@@ -226,8 +295,7 @@ func (s *Server) selectDynamicExample(mapping *RouteMapping, eval runtime.Evalua
 		}
 		// Matched
 		if ex.once {
-			onceID := fmt.Sprintf("dynamic:%s:%d", key, idx)
-			s.markOnceUsed(onceID)
+			s.markOnceUsed(ex.onceID)
 		}
 		if s.config.Verbose {
 			slog.Debug("selectDynamicExample: returning matched example", "idx", idx)
