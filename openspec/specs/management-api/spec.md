@@ -34,6 +34,21 @@ The mock server SHALL provide `POST /_mock/examples` to add a custom mock exampl
 - **WHEN** the request body is missing required fields or malformed
 - **THEN** the server responds with HTTP 400
 
+### Requirement: Add example with TTL
+The `AddExampleRequest` SHALL accept an optional `ttl` field (integer seconds).
+
+#### Scenario RS.MAPI.16: Adding an example with TTL
+- **WHEN** a POST request is sent to `/_mock/examples` with `ttl: 1`
+- **THEN** the server accepts the request and stores the TTL value alongside the example
+
+#### Scenario RS.MAPI.17: TTL field validation — negative value
+- **WHEN** a POST request is sent to `/_mock/examples` with `ttl: -1`
+- **THEN** the server responds with HTTP 400
+
+#### Scenario RS.MAPI.18: TTL field is optional (omitted)
+- **WHEN** a POST request is sent to `/_mock/examples` without a `ttl` field
+- **THEN** the server accepts the request and the example has no expiration
+
 ### Requirement: Request history endpoint
 The mock server SHALL provide `GET /_mock/requests` to retrieve request history.
 

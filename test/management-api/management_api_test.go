@@ -1,13 +1,19 @@
 package managementapi_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"os/exec"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/mamonth/oasmock/test/_shared/binhelper"
 	"github.com/mamonth/oasmock/test/_shared/clihelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -342,4 +348,142 @@ func TestManagementAPIAccessible(t *testing.T) {
 	default:
 		// No error yet, process still running
 	}
+}
+
+/*
+Scenario: Adding an example with TTL and verifying expiry
+Given a running server
+When a POST request to /_mock/examples includes ttl: 1
+Then the example is returned before expiry and becomes unavailable after expiry
+
+Related spec scenarios: RS.MSC.40, RS.MSC.41
+*/
+func TestManagementAPITTLExpiration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	cmd, errCh, port := clihelper.Cmd(t).SetSchema("../_shared/resources/test.yaml", "").Run()
+	defer clihelper.StopServer(t, cmd)
+
+	if !clihelper.WaitForServer(t, port, 2*time.Second) {
+		t.Fatal("server did not start within timeout")
+	}
+
+	// Add an example with a 1-second TTL
+	exampleJSON := `{
+		"path": "/conditional",
+		"method": "GET",
+		"ttl": 1,
+		"response": {
+			"code": 200,
+			"headers": { "X-TTL": "short-lived" },
+			"body": { "message": "expires soon" }
+		}
+	}`
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/_mock/examples", port), "application/json", strings.NewReader(exampleJSON))
+	require.NoError(t, err, "failed to POST example with TTL")
+	resp.Body.Close() //nolint:errcheck
+	assert.Equal(t, 200, resp.StatusCode, "expected status 200")
+
+	// Before expiry the example should be served
+	req1, err := http.Get(fmt.Sprintf("http://localhost:%d/conditional", port))
+	require.NoError(t, err, "failed to make request before expiry")
+	defer req1.Body.Close() //nolint:errcheck
+	assert.Equal(t, 200, req1.StatusCode, "expected status 200 before expiry")
+	assert.Equal(t, "short-lived", req1.Header.Get("X-TTL"), "expected TTL example to be served before expiry")
+
+	// After expiry the example should no longer be available (route exists, no example)
+	require.Eventually(t, func() bool {
+		req, err := http.Get(fmt.Sprintf("http://localhost:%d/conditional", port))
+		if err != nil {
+			return false
+		}
+		defer req.Body.Close() //nolint:errcheck
+		return req.StatusCode == 501
+	}, 4*time.Second, 100*time.Millisecond, "expected status 501 after TTL expiry")
+
+	// Check for any errors from the server process
+	select {
+	case err := <-errCh:
+		if err != nil && err.Error() != "signal: terminated" {
+			t.Logf("server process exited with error: %v", err)
+		}
+	default:
+		// No error yet, process still running
+	}
+}
+
+// safeBuffer is a goroutine-safe bytes.Buffer used to capture server stderr
+// while the process is still running.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+/*
+Scenario: Debug logging on example removal
+Given a running server with verbose logging enabled
+When a TTL example expires and the background sweep removes it
+Then a debug-level log entry about the removal is emitted
+
+Related spec scenarios: RS.MSC.47
+*/
+func TestManagementAPITTLDebugLog(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	// Start the server manually to capture stderr (debug log output).
+	ln, err := net.Listen("tcp", ":0")
+	require.NoError(t, err, "failed to find free port")
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+
+	cmd := exec.Command(binhelper.GetBuilded(t), "mock",
+		"--from", "../_shared/resources/test.yaml",
+		"--port", fmt.Sprintf("%d", port),
+		"--verbose")
+	var stderr safeBuffer
+	cmd.Stderr = &stderr
+	require.NoError(t, cmd.Start(), "failed to start oasmock")
+	defer func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Wait()
+	}()
+
+	if !clihelper.WaitForServer(t, port, 2*time.Second) {
+		t.Fatal("server did not start within timeout")
+	}
+
+	// Add a short-lived example
+	exampleJSON := `{
+		"path": "/conditional",
+		"method": "GET",
+		"ttl": 1,
+		"response": { "code": 200, "body": { "message": "expires soon" } }
+	}`
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/_mock/examples", port), "application/json", strings.NewReader(exampleJSON))
+	require.NoError(t, err, "failed to POST example with TTL")
+	resp.Body.Close() //nolint:errcheck
+	assert.Equal(t, 200, resp.StatusCode, "expected status 200")
+
+	// Wait for the sweep (1s ticker) to remove the expired example and log it
+	require.Eventually(t, func() bool {
+		return strings.Contains(stderr.String(), "Removed expired dynamic example")
+	}, 4*time.Second, 100*time.Millisecond, "expected debug log about removed expired example")
 }

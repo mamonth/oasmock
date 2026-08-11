@@ -26,6 +26,7 @@ var addExampleRequestSchema = gojsonschema.NewGoLoader(map[string]any{
 		},
 		"once":     map[string]any{"type": "boolean"},
 		"validate": map[string]any{"type": "boolean"},
+		"ttl":      map[string]any{"type": "integer", "minimum": 0},
 		"conditions": map[string]any{
 			"type":                 "object",
 			"additionalProperties": true,
@@ -195,6 +196,7 @@ func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 		Method     string         `json:"method"`
 		Once       bool           `json:"once"`
 		Validate   bool           `json:"validate"`
+		TTL        int            `json:"ttl"`
 		Conditions map[string]any `json:"conditions"`
 		Response   struct {
 			Code    int               `json:"code"`
@@ -227,15 +229,19 @@ func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 	// TODO: validate response body against OpenAPI schema if req.Validate is true
 	// (skipped for now)
 	// Create dynamic example
+	id := fmt.Sprintf("dynex-%d", time.Now().UnixNano())
 	example := dynamicExample{
+		onceID:     id,
 		once:       req.Once,
 		conditions: req.Conditions,
+		ttl:        req.TTL,
+	}
+	if req.TTL > 0 {
+		example.addedAt = time.Now()
 	}
 	example.response.code = req.Response.Code
 	example.response.headers = req.Response.Headers
 	example.response.body = req.Response.Body
-	// Generate a simple ID
-	id := fmt.Sprintf("dynex-%d", time.Now().UnixNano())
 	// Store under mapping key
 	key := routeKey(targetMapping.Method, targetMapping.ChiPattern)
 	if s.config.Verbose {
