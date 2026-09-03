@@ -35,24 +35,12 @@ func (s *Server) renderAsyncMessage(mapping *RouteMapping, in InboundMessage) (i
 	return s.engine.renderAsyncMessage(mapping, in)
 }
 
-func (s *Server) newAsyncEvaluator(mapping *RouteMapping, in InboundMessage) runtime.Evaluator {
-	return s.engine.newAsyncEvaluator(mapping, in)
-}
-
 func (s *Server) renderMessageSpecs(messages []*loader.MessageSpec, prefix, opID string, in InboundMessage) (int, []byte, error) {
 	return s.engine.RenderMessageSpecs(messages, prefix, opID, in)
 }
 
-func (s *Server) asyncRequestSource(in InboundMessage) *runtime.RequestSource {
-	return s.engine.asyncRequestSource(in)
-}
-
 func (s *Server) selectAsyncExample(message *loader.MessageSpec, evaluator runtime.Evaluator, opID string) (*MessageExampleView, string) {
 	return s.engine.SelectAsyncExample(message, evaluator, opID)
-}
-
-func (s *Server) renderAsyncPayload(example *MessageExampleView, evaluator runtime.Evaluator) ([]byte, error) {
-	return s.engine.RenderAsyncPayload(example, evaluator)
 }
 
 func (s *Server) recordAsyncExchange(in InboundMessage, address string, status int, responseBody []byte) {

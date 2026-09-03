@@ -11,8 +11,6 @@ import (
 // methods below are thin forwarders preserved for the HTTP pipeline and the
 // test surface.
 
-func (s *Server) startTTLSweep() { s.registry.startSweep() }
-
 func (s *Server) sweepExpiredExamples() { s.registry.sweepExpired() }
 
 func (s *Server) selectDynamicExample(mapping *RouteMapping, eval runtime.Evaluator) (*dynamicExample, string) {
@@ -44,26 +42,6 @@ func (s *Server) markOnceUsed(id string) { s.registry.markOnceUsed(id) }
 
 // isOnceUsed checks if an example has been used.
 func (s *Server) isOnceUsed(id string) bool { return s.registry.isOnceUsed(id) }
-
-func (s *Server) shouldSkipExample(ex *openapi3.Example, exampleKey, opID string) bool {
-	return s.engine.shouldSkipExample(ex, exampleKey, opID)
-}
-
-func (s *Server) categorizeExamples(examples openapi3.Examples, keys []string, eval runtime.Evaluator, opID string) (withParamsMatch, withoutParamsMatch map[string]*openapi3.Example) {
-	return s.engine.categorizeExamples(examples, keys, eval, opID)
-}
-
-func (s *Server) evaluateExample(example *openapi3.Example, eval runtime.Evaluator) ([]byte, error) {
-	return s.engine.evaluateExample(example, eval)
-}
-
-func (s *Server) evaluateHeaders(example *openapi3.Example, eval runtime.Evaluator) map[string]string {
-	return s.engine.evaluateHeaders(example, eval)
-}
-
-func (s *Server) resolveHeaderValue(val any, eval runtime.Evaluator) (string, bool) {
-	return s.engine.resolveHeaderValue(val, eval)
-}
 
 func getStatusCode(mapping *loader.RouteMapping, response *openapi3.Response) int {
 	// TODO: parse status code from mapping (key in Responses map)

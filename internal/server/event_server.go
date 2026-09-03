@@ -82,12 +82,6 @@ func (b *eventBus) deliver(sub channelSubscription, payload map[string]any) {
 	b.bus.WSBroadcast(sub.address, body)
 }
 
-// signalRPush emits a payload into a SignalR hub channel's open streams or as
-// a server invocation when none are open (RS.SHR.18-19).
-func (s *Server) signalRPush(address string, payload []byte) {
-	s.hubMgr.SignalRPush(address, payload)
-}
-
 // hubForAddress finds the SignalR hub owning a channel address.
 func (s *Server) hubForAddress(address string) *signalRHub {
 	return s.hubMgr.hubForAddress(address)
