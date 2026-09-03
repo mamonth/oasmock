@@ -15,11 +15,38 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 )
 
+// findAsyncRouteMapping resolves an AsyncAPI route mapping by protocol and
+// channel address (RS.MAPI.19, RS.MAPI.21).
+func (s *Server) findAsyncRouteMapping(protocol, channel, method string) *RouteMapping {
+	for i := range s.mappings {
+		mapping := &s.mappings[i]
+		if mapping.Protocol == "" {
+			continue
+		}
+		if protocol != "" && mapping.Protocol != protocol {
+			continue
+		}
+		if mapping.Path != channel {
+			continue
+		}
+		if method != "" && mapping.Method != method && method != DefaultMethod {
+			continue
+		}
+		return mapping
+	}
+	return nil
+}
+
 var addExampleRequestSchema = gojsonschema.NewGoLoader(map[string]any{
 	"type":     "object",
-	"required": []string{"path", "response"},
+	"required": []string{"response"},
 	"properties": map[string]any{
 		"path": map[string]any{"type": "string"},
+		"protocol": map[string]any{
+			"type": "string",
+			"enum": []string{"http", "ws"},
+		},
+		"channel": map[string]any{"type": "string"},
 		"method": map[string]any{
 			"type": "string",
 			"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
@@ -194,6 +221,8 @@ func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path       string         `json:"path"`
 		Method     string         `json:"method"`
+		Protocol   string         `json:"protocol"`
+		Channel    string         `json:"channel"`
 		Once       bool           `json:"once"`
 		Validate   bool           `json:"validate"`
 		TTL        int            `json:"ttl"`
@@ -208,23 +237,32 @@ func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"Invalid JSON"}`, http.StatusBadRequest)
 		return
 	}
-	if req.Path == "" || req.Response.Code == 0 {
+	if req.Response.Code == 0 || (req.Path == "" && req.Channel == "") {
 		http.Error(w, `{"error":"Missing required fields"}`, http.StatusBadRequest)
 		return
 	}
 	req.Method = cmp.Or(req.Method, DefaultMethod)
-	// Find a route mapping that matches the path
+
+	// Resolve the target route: OpenAPI path/method or AsyncAPI channel.
 	var targetMapping *RouteMapping
-	for i := range s.mappings {
-		mapping := &s.mappings[i]
-		if mapping.Pattern == req.Path && mapping.Method == req.Method {
-			targetMapping = mapping
-			break
+	if req.Protocol != "" || req.Channel != "" {
+		targetMapping = s.findAsyncRouteMapping(req.Protocol, req.Channel, req.Method)
+		if targetMapping == nil {
+			http.Error(w, `{"error":"No matching route found"}`, http.StatusBadRequest)
+			return
 		}
-	}
-	if targetMapping == nil {
-		http.Error(w, `{"error":"No matching route found"}`, http.StatusBadRequest)
-		return
+	} else {
+		for i := range s.mappings {
+			mapping := &s.mappings[i]
+			if mapping.Pattern == req.Path && mapping.Method == req.Method {
+				targetMapping = mapping
+				break
+			}
+		}
+		if targetMapping == nil {
+			http.Error(w, `{"error":"No matching route found"}`, http.StatusBadRequest)
+			return
+		}
 	}
 	// TODO: validate response body against OpenAPI schema if req.Validate is true
 	// (skipped for now)
@@ -251,11 +289,9 @@ func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 			"method", req.Method,
 			"chiPattern", targetMapping.ChiPattern,
 			"pattern", targetMapping.Pattern,
-			"numExamples", len(s.dynamicExamples[key])+1)
+			"numExamples", len(s.registry.dynamicExamples[key])+1)
 	}
-	s.dyMu.Lock()
-	s.dynamicExamples[key] = append(s.dynamicExamples[key], example)
-	s.dyMu.Unlock()
+	s.registry.addDynamic(key, example)
 	// Respond with success
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{

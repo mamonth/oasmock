@@ -11,11 +11,14 @@
 - `api/` - Management HTTP API docs (e.g. OpenAPI specs)
 - `cmd/` - CLI entrypoints codebase
 - `internal/` - Application codebase
+  - `internal/asyncapi/` - Neutral AsyncAPI 3.x document view + structural validation
+  - `internal/server/` - HTTP/WebSocket server (Controller), example engine + registry, SignalR hub manager, event bus, push scheduler, protocol adapters (http/ws), async-mocking management API
 - `mock/` - Mocks generated from interfaces, duplicates codebase structure
 - `scripts/` - Various automation scripts
 - `test/` - Integration tests and test related codebase and resources
   - `test/_shared` - Common files for tests codebase including fixtures, helper functions, resources etc
-    - `test/_shared/resources` - Various resources (e.g. yaml, json files)
+    - `test/_shared/resources` - Various resources (e.g. yaml, json files incl. AsyncAPI fixtures)
+- `third_party/` - Vendored dependencies (AsyncAPI parser `go-asyncapi`, wired via `go.mod` `replace`)
 - `docs/` - Project documentation
   - `docs/diagrams` - PlantUML diagrams (container for extracted `.puml` files)
 

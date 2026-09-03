@@ -21,6 +21,8 @@ func (p *loaderRouteProvider) BuildRouteMappings(schemas []SchemaInfo) ([]RouteM
 	for i, schema := range schemas {
 		loaderSchemas[i] = loader.SchemaInfo{
 			Spec:   schema.Spec,
+			Kind:   schema.Kind,
+			Async:  schema.Async,
 			Prefix: schema.Prefix,
 		}
 	}
@@ -30,22 +32,7 @@ func (p *loaderRouteProvider) BuildRouteMappings(schemas []SchemaInfo) ([]RouteM
 		return nil, err
 	}
 
-	// Convert loader.RouteMapping to RouteMapping
-	mappings := make([]RouteMapping, len(loaderMappings))
-	for i, lm := range loaderMappings {
-		mappings[i] = RouteMapping{
-			Method:     lm.Method,
-			Path:       lm.Path,
-			Pattern:    lm.Pattern,
-			Prefix:     lm.Prefix,
-			ChiPattern: lm.ChiPattern,
-			Operation:  lm.Operation,
-			Parameters: lm.Parameters,
-			Responses:  lm.Responses,
-		}
-	}
-
-	return mappings, nil
+	return ConvertRouteMappings(loaderMappings), nil
 }
 
 // stateManagerStore wraps state.Manager to implement StateStore.

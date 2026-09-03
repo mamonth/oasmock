@@ -148,34 +148,51 @@ flowchart LR
 - **Dependencies**: Server, Loader
 
 ### 2.2 Server Component (`internal/server/`)
-**Purpose**: Core HTTP server and component coordination.
+**Purpose**: Core HTTP/WebSocket server and component coordination.
 - **Key Files**:
-  - `server.go` - Main server implementation and HTTP handlers
+  - `server.go` - Main server implementation (Controller) + HTTP handlers
   - `interfaces.go` - All public interfaces and dependency definitions
-   - `server_management.go` - Management API endpoints
-   - `server_example.go` - Example selection and response generation
-   - `server_eval.go` - Runtime expression evaluation integration
-   - `server_state.go` - State management helpers
-   - `jsonrpc.go` - JSON-RPC handler (gateway requests)
-   - `jsonrpc_protocol.go` - JSON-RPC 2.0 protocol parsing and error responses
-   - `wrappers.go` - Adapter implementations
-   - `adapters/` - Formal adapter layer for external components
+  - `engine.go` - `exampleEngine`: selection, templating, state, async rendering (implements `MessageRenderer`)
+  - `registry.go` - `exampleRegistry`: x-mock-once markers, dynamic examples, TTL sweep
+  - `convert.go` - Single loader↔server route/type conversion points
+  - `hubmanager.go` - `hubManager` (implements `ConsumerBus`): SignalR hubs + ws broadcast
+  - `event_server.go` - `eventBus`: event broker coordination on `MessageRenderer` + `ConsumerBus`
+  - `event_broker.go` - `eventBroker`: subscription registry + dispatch (pure)
+  - `scheduler.go` - `pushScheduler`: recurring push jobs (pure)
+  - `server_management.go` - Management API endpoints
+  - `server_example.go` / `server_eval.go` / `server_state.go` - Thin Server forwarders (selection/templating/state)
+  - `jsonrpc.go` - JSON-RPC handler (gateway requests)
+  - `jsonrpc_protocol.go` - JSON-RPC 2.0 protocol parsing and error responses
+  - `wrappers.go` - dependency wrapper implementations (stores, factories, processors)
+  - `protocol.go` - Protocol adapter interface + registry (http/ws)
+  - `pathparams.go` - chi route param extraction for `{$channel.*}`
+  - `http_adapter.go` - AsyncAPI http channel serving
+  - `ws_adapter.go` - WebSocket serving + connection registry
+  - `signalr_hub.go` - SignalR hub overlay (negotiate, handshake, framing)
+  - `async_message.go` - AsyncAPI message selection/rendering
 - **Public Interfaces**:
-  - `RouteProvider` - Builds route mappings from OpenAPI schemas
+  - `RouteProvider` - Builds route mappings from OpenAPI/AsyncAPI schemas
+  - `ProtocolAdapter` - Per-protocol serving strategy (http/ws)
+  - `MessageHandler` - AsyncAPI message rendering via shared pipeline
   - `StateStore` - Manages namespaced state with CRUD operations
   - `HistoryStore` - Stores request/response history records
   - `DataSource` - Generic data source for runtime expressions
   - `ExpressionEvaluator` - Evaluates runtime expressions (`{$request.path.id}`)
   - `ExtensionProcessor` - Processes OpenAPI extensions (`x-mock-*`)
+  - `MessageRenderer` - Narrow rendering surface (engine) consumed by hub/event bus/adapters
+  - `ConsumerBus` - Payload emission to SignalR streams + ws consumers (hub manager)
 - **Responsibilities**:
   - HTTP request routing using Chi router
+  - WebSocket upgrades and connection lifecycle
+  - SignalR hub serving for documents with root `x-signalr`
+  - Event-driven push bus decoupling REST producers from ws consumers
   - Middleware stack (CORS, logging, delay, history)
-  - Response generation and example selection
+  - Response generation and example selection (OpenAPI + AsyncAPI)
   - Runtime expression evaluation coordination
   - Extension processing and state updates
-   - Management API endpoints (`/_mock/examples`, `/_mock/requests`)
+   - Management API endpoints (`/_mock/examples`, `/_mock/requests`, async-mocking surface)
    - RPC gateway dispatch (JSON-RPC to operation mapping via `x-rpc`)
-- **Dependencies**: Loader, Runtime, Extensions, State, History
+- **Dependencies**: Loader, Runtime, Extensions, State, History, AsyncAPI, Gorilla WebSocket
 
 ### 2.3 Runtime Component (`internal/runtime/`)
 **Purpose**: Runtime expression evaluation engine.
@@ -188,6 +205,9 @@ flowchart LR
   - `RequestSource` - Access to HTTP request data (path params, query, headers, body, cookies)
   - `StateSource` - Access to namespaced server state
   - `EnvSource` - Access to environment variables
+  - `MessageSource` - AsyncAPI message payload/headers (`{$message.*}`)
+  - `ChannelSource` - AsyncAPI channel parameters (`{$channel.*}`)
+  - `EventSource` - Event bus payload (`{$event.*}`)
 - **Responsibilities**:
   - Parse dot-separated paths with escape support (`path.id`, `query.page`)
   - Evaluate runtime expressions (`{$request.path.id | default:0}`)
@@ -195,44 +215,51 @@ flowchart LR
 - **Dependencies**: None (self-contained)
 
 ### 2.4 Extensions Component (`internal/extensions/`)
-**Purpose**: OpenAPI extension processing for advanced mock behavior.
+**Purpose**: OpenAPI/AsyncAPI extension processing for advanced mock behavior.
 - **Key Files**:
   - `extract.go` - Extension extraction utilities
   - `match.go` - Parameter matching with JSON schema validation
+  - `example_value.go` - `ExampleValue` wrapper abstracting both example sources
 - **Supported Extensions**:
   - `x-mock-set-state` - Set server state after response
   - `x-mock-skip` - Skip example from selection
   - `x-mock-once` - Use example only once
   - `x-mock-match` - Conditional example selection (legacy alias: `x-mock-params-match`)
   - `x-mock-headers` - Custom response headers
+  - `x-event-trigger` - Fire a named event from an OpenAPI example
 - **Functions**:
-  - `ExtractSetState()`, `ExtractParamsMatch()`, `ExtractHeaders()`
+  - `ExtractSetState()`, `ExtractParamsMatch()`, `ExtractHeaders()`, `ExtractEventTriggers()`
   - `EvaluateParamsMatch()` - Uses Runtime.Evaluator for expression evaluation
   - `ExtractSkip()`, `ExtractOnce()`
+  - `OpenAPIExampleValue()` / `NewExampleValue()` - source-agnostic wrappers
 - **Responsibilities**:
-  - Extract extension values from OpenAPI examples
+  - Extract extension values from OpenAPI and AsyncAPI examples
   - Validate JSON schemas for parameter matching
   - Evaluate runtime expressions in match conditions
+  - Uniform example selection behavior across spec kinds (parity)
 - **Dependencies**: Runtime (for expression evaluation)
 
 ### 2.5 Loader Component (`internal/loader/`)
-**Purpose**: OpenAPI schema loading and route mapping.
+**Purpose**: OpenAPI/AsyncAPI schema loading and route mapping.
 - **Key Files**:
-  - `schema.go` - Schema loading and validation
+  - `schema.go` - Schema loading, detection, and validation
   - `router.go` - Route mapping construction
+  - `decode.go` - YAML/JSON generic decoding for spec-type detection
+  - `asyncapi/` - Neutral AsyncAPI document view + structural validation
 - **Key Types**:
-  - `SchemaInfo` - Loaded OpenAPI spec with prefix
-  - `RouteMapping` - Route information for server routing
+  - `SchemaInfo` - Loaded spec (OpenAPI or AsyncAPI) with prefix and `Kind`
+  - `RouteMapping` - Route information for server routing (protocol/action/messages)
 - **Functions**:
   - `LoadSchemas(sources, prefixes) ([]SchemaInfo, error)` - Load multiple schemas
-  - `loadSingleSchema(path) (*openapi3.T, error)` - Load and validate single schema
+  - `detectKind(data)` - Dispatch on root key (`openapi` vs `asyncapi`)
+  - `BuildRouteMappings(infos)` - OpenAPI + AsyncAPI route construction
   - `OpenAPIPatternToChi(pattern) string` - Convert OpenAPI patterns to Chi format
 - **Responsibilities**:
-  - Load OpenAPI YAML/JSON files from disk
-  - Validate OpenAPI 3.0 schemas
-  - Build route mappings for server registration
-  - Handle path prefixing for multi-schema scenarios
-- **Dependencies**: None (uses external `kin-openapi` library)
+  - Autodetect spec type by root version key (no extra flags)
+  - Load and validate OpenAPI 3.0 and AsyncAPI 3.0.0/3.1.0 files
+  - Map AsyncAPI channels to `http`/`ws` routes by protocol binding
+  - Handle path/address prefixing for multi-schema scenarios
+- **Dependencies**: `kin-openapi` (OpenAPI), `internal/asyncapi` (AsyncAPI)
 
 ### 2.6 State Component (`internal/state/`)
 **Purpose**: Thread-safe, namespaced key-value state management.
@@ -304,6 +331,19 @@ flowchart LR
   - Enable clean unit testing with dependency injection
   - Support test-driven development
 - **Dependencies**: All interface packages (generated from them)
+
+### 2.10 AsyncAPI Subsystem
+
+OASMock autodetects AsyncAPI 3.0.0/3.1.0 files (root key `asyncapi`, version major 3) and serves them alongside OpenAPI. The AsyncAPI subsystem adds:
+
+- **Loader autodetect** (`internal/loader/schema.go`): `detectKind` dispatches on the root version key; no new CLI flags.
+- **Neutral document view** (`internal/asyncapi/`): channels, operations, messages, bindings, examples with `x-mock-*` extensions; root `x-signalr` capture. The vendored `benelser/go-asyncapi` parser is isolated behind this package.
+- **Protocol adapters** (`internal/server/protocol.go`): `ProtocolAdapter` strategies registered keyed by protocol. `httpAdapter` reuses the HTTP pipeline; `wsAdapter` upgrades WebSockets and tracks a connection registry.
+- **SignalR overlay** (`internal/server/signalr_hub.go`): a document with root `x-signalr` is served as one SignalR hub — `POST {hubPath}/negotiate`, token-correlated ws upgrade, `\x1e` framing, handshake. Streams map to channels (`StreamInvocation` → held-open `StreamItem`); one-shot invocations map to operations (`Invocation` → `Completion`); event-driven items append into open streams via the open-stream registry.
+- **Event broker** (`internal/server/event_broker.go`): OpenAPI examples fire named events via `x-event-trigger`; AsyncAPI message examples subscribe via `x-send-events` (named + `connect`/`cron`/`receive`). Delivery is broadcast with client-side filtering (`{$event.*}` templating). `POST /_mock/events/fire` fires events ad-hoc.
+- **Async mocking management API**: `/_mock/ws/push` (delayed/targeted/broadcast), `/_mock/ws/consumers` (discovery incl. SignalR streams), `/_mock/ws/schedule` (recurring push, cancellable), `/_mock/ws/disconnect` (lifecycle control). `/_mock/examples` accepts AsyncAPI route identifiers (protocol + channel).
+- **Templating parity**: `{$message.*}`, `{$channel.*}`, `{$event.*}` data sources; `ExampleValue` wrapper unifies selection across OpenAPI/AsyncAPI; state/history integration uses each schema's isolated namespace.
+- **Unsupported protocols** (`amqp`, `kafka`, ...) fail startup with exit code 3.
 
 ## 3. Sequence Flows
 

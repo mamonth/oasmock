@@ -163,6 +163,83 @@ type EnvSource struct {
 	Env map[string]string
 }
 
+// EventSource provides access to the payload of the currently fired event via
+// {$event.*} (design D8).
+type EventSource struct {
+	Data map[string]any
+}
+
+func (e *EventSource) Get(path string) (any, bool) {
+	return getMapNested(e.Data, path)
+}
+
+// MessageSource provides access to an AsyncAPI message via {$message.*}
+// (payload and headers) (RS.ATM.1, RS.ATM.5).
+type MessageSource struct {
+	Payload any
+	Headers map[string]string
+}
+
+func (m *MessageSource) Get(path string) (any, bool) {
+	parts := splitEscapedPath(path)
+	if len(parts) < 2 {
+		return nil, false
+	}
+	switch parts[0] {
+	case "payload":
+		if len(parts) == 2 {
+			obj, ok := m.Payload.(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			v, ok := obj[parts[1]]
+			return v, ok
+		}
+		return getNested(m.Payload, parts[1:])
+	case "headers":
+		if len(parts) == 2 {
+			v, ok := m.Headers[parts[1]]
+			return v, ok
+		}
+	}
+	return nil, false
+}
+
+// ChannelSource provides access to channel address parameters via
+// {$channel.*} (RS.ATM.3).
+type ChannelSource struct {
+	Params map[string]string
+}
+
+func (c *ChannelSource) Get(path string) (any, bool) {
+	parts := splitEscapedPath(path)
+	if len(parts) != 1 {
+		return nil, false
+	}
+	v, ok := c.Params[parts[0]]
+	return v, ok
+}
+
+// getMapNested retrieves a value from a flat or nested map by dot path.
+func getMapNested(data map[string]any, path string) (any, bool) {
+	parts := splitEscapedPath(path)
+	if len(parts) == 0 {
+		return nil, false
+	}
+	if len(parts) == 1 {
+		if val, ok := data[parts[0]]; ok {
+			return val, true
+		}
+		return nil, false
+	}
+	topKey := parts[0]
+	val, ok := data[topKey]
+	if !ok {
+		return nil, false
+	}
+	return getNested(val, parts[1:])
+}
+
 func (e *EnvSource) Get(path string) (any, bool) {
 	// Environment variables are flat
 	parts := splitEscapedPath(path)

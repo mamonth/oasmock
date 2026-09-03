@@ -77,6 +77,9 @@ func BuildRpcMappings(infos []SchemaInfo, cfg *RpcConfig) ([]*RpcRouteMapping, e
 	var mappings []*RpcRouteMapping
 
 	for _, info := range infos {
+		if info.Kind == KindAsyncAPI || info.Spec == nil {
+			continue
+		}
 		spec := info.Spec
 		prefix := info.Prefix
 

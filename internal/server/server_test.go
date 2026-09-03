@@ -20,14 +20,11 @@ import (
 
 	"github.com/mamonth/oasmock/internal/history"
 	"github.com/mamonth/oasmock/internal/loader"
-	"github.com/mamonth/oasmock/internal/runtime"
 	"github.com/mamonth/oasmock/internal/state"
 	mock_runtime "github.com/mamonth/oasmock/mock/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-var _ = runtime.RequestSource{}
 
 // newMockedServerWithGeneratedMocks creates a server with generated mock dependencies for testing.
 func newMockedServerWithGeneratedMocks(t *testing.T, config Config) (*Server, *MockRouteProvider, *MockStateStore, *MockHistoryStore, *MockExpressionEvaluator, *MockRequestSourceFactory, *MockStateSourceFactory, *MockEnvSourceFactory, *MockExtensionProcessor) {
@@ -40,6 +37,7 @@ func newMockedServerWithGeneratedMocks(t *testing.T, config Config) (*Server, *M
 	routeProvider.EXPECT().BuildRouteMappings(gomock.Any()).Return([]RouteMapping{}, nil)
 	stateStore := NewMockStateStore(ctrl)
 	historyStore := NewMockHistoryStore(ctrl)
+	historyStore.EXPECT().Add(gomock.Any()).AnyTimes()
 	expressionEvaluator := NewMockExpressionEvaluator(ctrl)
 	requestSourceFactory := NewMockRequestSourceFactory(ctrl)
 	stateSourceFactory := NewMockStateSourceFactory(ctrl)
@@ -94,7 +92,12 @@ func TestValidateAddExampleRequest(t *testing.T) {
 		{
 			name:    "missing path",
 			json:    `{"response":{"code":200}}`,
-			wantErr: true,
+			wantErr: false, // path is optional; channel may be supplied instead
+		},
+		{
+			name:    "valid async channel request",
+			json:    `{"protocol":"ws","channel":"/alerts","response":{"code":200,"body":{"a":1}}}`,
+			wantErr: false,
 		},
 		{
 			name:    "missing response",
@@ -727,6 +730,7 @@ func TestApplySetState(t *testing.T) {
 			store, eval, callsPtr := tt.setup(ctrl)
 			server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 			server.stateStore = store
+			server.engine.stateStore = store
 			server.applySetState(tt.stateMap, eval, "")
 			assert.Equal(t, tt.wantCalls, *callsPtr, "store calls mismatch")
 		})
@@ -801,7 +805,7 @@ func TestHandleAddExample(t *testing.T) {
 				ChiPattern: "/test",
 			}},
 			wantStatus:  http.StatusBadRequest,
-			wantJSON:    map[string]any{"error": "invalid request: (root): path is required"},
+			wantJSON:    map[string]any{"error": "Missing required fields"},
 			wantExample: false,
 		},
 		{
@@ -829,7 +833,7 @@ func TestHandleAddExample(t *testing.T) {
 			// Set up mappings
 			server.mappings = tt.mappings
 			// Initialize dynamic examples map
-			server.dynamicExamples = make(map[string][]dynamicExample)
+			server.registry.dynamicExamples = make(map[string][]dynamicExample)
 
 			// Create request
 			req := httptest.NewRequest("POST", "/api/examples", strings.NewReader(tt.reqBody))
@@ -858,13 +862,13 @@ func TestHandleAddExample(t *testing.T) {
 			// Check if example was added
 			if tt.wantExample {
 				key := "GET /test"
-				server.dyMu.RLock()
-				defer server.dyMu.RUnlock()
-				examples, exists := server.dynamicExamples[key]
+				server.registry.dyMu.RLock()
+				examples, exists := server.registry.dynamicExamples[key]
+				server.registry.dyMu.RUnlock()
 				assert.True(t, exists, "dynamic example should be added for key %s", key)
 				assert.Len(t, examples, 1, "should have one example")
 			} else {
-				assert.Empty(t, server.dynamicExamples, "no examples should be added")
+				assert.Empty(t, server.registry.dynamicExamples, "no examples should be added")
 			}
 		})
 	}
@@ -1350,7 +1354,7 @@ paths:
 			name: "successful request with built-in example",
 			setupServer: func(s *Server, reqFact *MockRequestSourceFactory, stateFact *MockStateSourceFactory, envFact *MockEnvSourceFactory) {
 				// No dynamic examples
-				s.dynamicExamples = make(map[string][]dynamicExample)
+				s.registry.dynamicExamples = make(map[string][]dynamicExample)
 				// Setup mock factories (not needed for this test)
 				// With generated mocks, we need to set expectations
 				// Since factories aren't used in this test, we allow any calls returning nil
@@ -1375,7 +1379,7 @@ paths:
 		{
 			name: "no response defined",
 			setupServer: func(s *Server, reqFact *MockRequestSourceFactory, stateFact *MockStateSourceFactory, envFact *MockEnvSourceFactory) {
-				s.dynamicExamples = make(map[string][]dynamicExample)
+				s.registry.dynamicExamples = make(map[string][]dynamicExample)
 				// Allow any factory calls returning nil
 				reqFact.EXPECT().NewRequestSource(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 				stateFact.EXPECT().NewStateSource(gomock.Any()).Return(nil).AnyTimes()
@@ -1399,9 +1403,9 @@ paths:
 			name: "dynamic example selected",
 			setupServer: func(s *Server, reqFact *MockRequestSourceFactory, stateFact *MockStateSourceFactory, envFact *MockEnvSourceFactory) {
 				// Add a dynamic example
-				s.dynamicExamples = make(map[string][]dynamicExample)
+				s.registry.dynamicExamples = make(map[string][]dynamicExample)
 				key := "GET /test"
-				s.dynamicExamples[key] = []dynamicExample{{
+				s.registry.dynamicExamples[key] = []dynamicExample{{
 					once:       false,
 					conditions: nil,
 					response: struct {

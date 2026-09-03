@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/mamonth/oasmock/internal/asyncapi"
+	"github.com/mamonth/oasmock/internal/loader"
+	"github.com/mamonth/oasmock/internal/runtime"
 )
 
 // RouteProvider builds route mappings from OpenAPI schemas.
@@ -15,7 +18,8 @@ type RouteProvider interface {
 	BuildRouteMappings(schemas []SchemaInfo) ([]RouteMapping, error)
 }
 
-// RouteMapping represents a route mapping for a single OpenAPI operation.
+// RouteMapping represents a route mapping for a single OpenAPI operation or
+// AsyncAPI channel/operation.
 type RouteMapping struct {
 	Method     string
 	Path       string // The full path pattern with prefix (e.g., "/v1/users/{id}")
@@ -25,11 +29,18 @@ type RouteMapping struct {
 	Operation  *openapi3.Operation
 	Parameters openapi3.Parameters
 	Responses  *openapi3.Responses
+
+	// AsyncAPI-specific route data.
+	Protocol string                // "http" | "ws" | ""
+	Action   string                // "send" | "receive" | ""
+	Messages []*loader.MessageSpec // AsyncAPI-backed message specs
 }
 
-// SchemaInfo holds a loaded OpenAPI spec and its path prefix.
+// SchemaInfo holds a loaded spec (OpenAPI or AsyncAPI) and its path prefix.
 type SchemaInfo struct {
 	Spec   *openapi3.T
+	Kind   loader.Kind
+	Async  *asyncapi.Document
 	Prefix string
 }
 
@@ -160,4 +171,39 @@ type Dependencies struct {
 	EnvSourceFactory     EnvSourceFactory
 	ExpressionEvaluator  ExpressionEvaluator
 	ExtensionProcessor   ExtensionProcessor
+}
+
+// MessageRenderer is the message-rendering surface consumed by the SignalR
+// hub, the event bus and the async protocol adapters. It narrows the
+// dependencies of those subsystems to the example-selection/templating core
+// instead of the whole Server. exampleEngine implements it.
+type MessageRenderer interface {
+	// SelectAsyncExample selects a message example using the shared x-mock-*
+	// semantics.
+	SelectAsyncExample(message *loader.MessageSpec, evaluator runtime.Evaluator, opID string) (*MessageExampleView, string)
+	// RenderMessageSpecs renders the first selectable example across the given
+	// message specs.
+	RenderMessageSpecs(messages []*loader.MessageSpec, prefix, opID string, in InboundMessage) (int, []byte, error)
+	// RenderMessageSpecsWithEvent renders message specs with an {$event.*} data
+	// source.
+	RenderMessageSpecsWithEvent(messages []*loader.MessageSpec, prefix, opID string, payload map[string]any) (int, []byte, error)
+	// RenderAsyncPayload evaluates runtime expressions in an example payload.
+	RenderAsyncPayload(example *MessageExampleView, evaluator runtime.Evaluator) ([]byte, error)
+	// ApplySetState applies x-mock-set-state against a schema namespace.
+	ApplySetState(stateMap map[string]any, eval runtime.Evaluator, prefix string)
+	// NewStateSource builds the runtime state source for a schema namespace.
+	NewStateSource(prefix string) *runtime.StateSource
+	// NewEnvSource builds the runtime environment-variable source.
+	NewEnvSource() *runtime.EnvSource
+}
+
+// ConsumerBus emits rendered payloads to channel consumers (SignalR open
+// streams and/or raw ws broadcast). hubManager implements it.
+type ConsumerBus interface {
+	// SignalRPush emits a payload into a SignalR hub channel's open streams or
+	// as a server invocation when none are open (RS.SHR.18-19).
+	SignalRPush(address string, payload []byte)
+	// WSBroadcast sends a payload to every connected raw ws consumer of a
+	// channel address.
+	WSBroadcast(address string, payload []byte)
 }

@@ -81,17 +81,149 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RequestHistoryResponse'
+  /events/fire:
+    post:
+      operationId: fireEvent
+      summary: Fire a named event on the event bus
+      description: |
+        Fires a named event ad-hoc, delivering it (immediately or after a delay)
+        to x-send-events consumers across the loaded schemas.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FireEventRequest'
+      responses:
+        '200':
+          description: Event accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncActionResponse'
+        '400':
+          description: Invalid request
+  /ws/push:
+    post:
+      operationId: pushToChannel
+      summary: Push a message to channel consumers
+      description: |
+        Pushes a message to the connected consumers of an AsyncAPI channel.
+        Supports immediate or delayed delivery, targeted (by connectionId) or
+        broadcast push, and runtime-expression templating of the payload.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushRequest'
+      responses:
+        '200':
+          description: Push accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncActionResponse'
+        '400':
+          description: Invalid request
+        '404':
+          description: Unknown connectionId
+  /ws/consumers:
+    get:
+      operationId: listConsumers
+      summary: List connected consumers per channel
+      description: |
+        Returns the currently connected consumers for an AsyncAPI channel,
+        including open SignalR streams when applicable.
+      parameters:
+        - name: channel
+          in: query
+          required: true
+          description: Channel address
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Consumers listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsumersResponse'
+  /ws/schedule:
+    post:
+      operationId: scheduleRecurringPush
+      summary: Schedule a recurring push
+      description: |
+        Schedules a message to be pushed to a channel at a fixed interval until
+        cancelled by its push ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleRequest'
+      responses:
+        '200':
+          description: Schedule created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncActionResponse'
+        '400':
+          description: Invalid request
+  /ws/schedule/{pushId}:
+    delete:
+      operationId: stopRecurringPush
+      summary: Stop a recurring push
+      parameters:
+        - name: pushId
+          in: path
+          required: true
+          description: Push ID returned by the schedule endpoint
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Schedule stopped
+        '404':
+          description: Unknown pushId
+  /ws/disconnect:
+    post:
+      operationId: disconnectConsumer
+      summary: Force-disconnect a consumer
+      description: |
+        Terminates a connected consumer's WebSocket connection, with an optional
+        close reason/code, or simulates an abrupt drop.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisconnectRequest'
+      responses:
+        '200':
+          description: Consumer disconnected
+        '400':
+          description: Invalid request
+        '404':
+          description: Unknown connectionId
 components:
   schemas:
     AddExampleRequest:
       type: object
       required:
-        - path
         - response
       properties:
         path:
           type: string
           description: The request path (including path parameters) to match
+        protocol:
+          type: string
+          enum: [http, ws]
+          description: AsyncAPI protocol when targeting an AsyncAPI channel
+        channel:
+          type: string
+          description: AsyncAPI channel address (prefixed) when targeting an AsyncAPI channel
         method:
           type: string
           enum: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
@@ -184,3 +316,110 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RequestHistoryItem'
+    FireEventRequest:
+      type: object
+      required:
+        - event
+      properties:
+        event:
+          type: string
+          description: The named event to fire
+        payload:
+          type: object
+          description: Event payload exposed to consuming templates via {$event.*}
+        delay:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Delivery delay in milliseconds
+        global:
+          type: boolean
+          default: false
+          description: When true, the event is broadcast over all loaded schemas
+    PushRequest:
+      type: object
+      required:
+        - channel
+      properties:
+        channel:
+          type: string
+          description: AsyncAPI channel address to push to
+        connectionId:
+          type: string
+          description: Target a specific consumer; omitted broadcasts to all
+        payload:
+          type: object
+          description: Message payload, templated with {$state.*}/{$env.*}
+        delay:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Delivery delay in milliseconds
+    ScheduleRequest:
+      type: object
+      required:
+        - channel
+        - interval
+      properties:
+        channel:
+          type: string
+          description: AsyncAPI channel address to push to
+        interval:
+          type: integer
+          minimum: 1
+          description: Delivery interval in milliseconds
+        payload:
+          type: object
+          description: Message payload pushed at each interval
+    DisconnectRequest:
+      type: object
+      required:
+        - connectionId
+      properties:
+        connectionId:
+          type: string
+          description: Active consumer connection id
+        reason:
+          type: string
+          description: Optional close reason
+        code:
+          type: integer
+          description: Optional WebSocket close code
+        abrupt:
+          type: boolean
+          default: false
+          description: Simulate an abrupt network drop (no close frame)
+    AsyncActionResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        event:
+          type: string
+          description: Fired event name (fire-event endpoint only)
+        pushId:
+          type: string
+          description: Scheduled push id (schedule endpoint only)
+    ConsumersResponse:
+      type: object
+      properties:
+        consumers:
+          type: array
+          items:
+            type: object
+            properties:
+              connectionId:
+                type: string
+              channel:
+                type: string
+              streams:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    connectionId:
+                      type: string
+                    invocationId:
+                      type: string
+                    streamId:
+                      type: string

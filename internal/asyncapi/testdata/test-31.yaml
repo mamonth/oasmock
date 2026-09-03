@@ -1,0 +1,23 @@
+asyncapi: 3.1.0
+info:
+  title: Webhooks Events
+  version: 1.0.0
+channels:
+  signedUp:
+    address: user/signedup
+    messages:
+      signedUpMsg:
+        examples:
+          - payload:
+              id: 1
+operations:
+  receiveSignedUp:
+    action: receive
+    channel:
+      $ref: '#/channels/signedUp'
+components:
+  messages:
+    signedUpMsg:
+      examples:
+        - payload:
+            id: 2

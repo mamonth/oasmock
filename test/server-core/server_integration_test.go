@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"github.com/mamonth/oasmock/test/_shared/clihelper"
 	"github.com/stretchr/testify/assert"
@@ -618,5 +622,150 @@ func TestServerCustomDelay(t *testing.T) {
 		}
 	default:
 		// No error yet, process still running
+	}
+}
+
+/*
+Scenario: Server serves an AsyncAPI ws channel end to end
+Given an AsyncAPI spec with a ws channel
+When the server starts and a ws client connects
+Then a receive-operation message is emitted to the client
+
+Related spec scenarios: RS.MSC.52, RS.ASP.2, RS.ASP.7
+*/
+func TestServerAsyncAPIWS(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "asyncapi.yaml")
+	require.NoError(t, os.WriteFile(schemaPath, []byte(`asyncapi: 3.0.0
+info:
+  title: Alerts
+  version: 1.0.0
+channels:
+  alerts:
+    address: /alerts
+    bindings:
+      ws:
+        method: GET
+    messages:
+      alertMsg:
+        examples:
+          - name: snap
+            payload:
+              level: info
+              msg: hello-ws
+operations:
+  receiveAlerts:
+    action: receive
+    channel:
+      $ref: '#/channels/alerts'
+`), 0644))
+
+	cmd, errCh, port := clihelper.Cmd(t).SetSchema(schemaPath, "").Run()
+	defer clihelper.StopServer(t, cmd)
+	if !clihelper.WaitForServer(t, port, 2*time.Second) {
+		t.Fatal("server did not start within timeout")
+	}
+
+	wsURL := fmt.Sprintf("ws://localhost:%d/alerts", port)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	//nolint:errcheck
+	defer conn.Close() //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	assert.Contains(t, string(msg), "hello-ws")
+
+	select {
+	case err := <-errCh:
+		if err != nil && err.Error() != "signal: terminated" {
+			t.Logf("server process exited with error: %v", err)
+		}
+	default:
+	}
+}
+
+/*
+Scenario: Server serves a SignalR hub from an x-signalr document
+Given an AsyncAPI spec with root x-signalr
+When a negotiate request is made and a hub ws client connects
+Then negotiate returns a token and the hub answers the handshake
+
+Related spec scenarios: RS.MSC.53, RS.SHR.8, RS.SHR.14
+*/
+func TestServerSignalRHub(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "signalr.yaml")
+	require.NoError(t, os.WriteFile(schemaPath, []byte(`asyncapi: 3.0.0
+info:
+  title: Prices
+  version: 1.0.0
+x-signalr:
+  path: /hub
+channels:
+  priceFeed:
+    address: priceFeed
+    bindings:
+      ws:
+        method: GET
+    messages:
+      priceMsg:
+        examples:
+          - name: snap
+            payload:
+              symbol: ETH
+              price: 3000
+operations:
+  receivePrice:
+    action: receive
+    channel:
+      $ref: '#/channels/priceFeed'
+`), 0644))
+
+	cmd, errCh, port := clihelper.Cmd(t).SetSchema(schemaPath, "").Run()
+	defer clihelper.StopServer(t, cmd)
+	if !clihelper.WaitForServer(t, port, 2*time.Second) {
+		t.Fatal("server did not start within timeout")
+	}
+
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/hub/negotiate?negotiateVersion=1", port),
+		"application/json", nil)
+	require.NoError(t, err)
+	//nolint:errcheck
+	defer resp.Body.Close() //nolint:errcheck
+	var negotiate map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&negotiate))
+	assert.Equal(t, float64(1), negotiate["negotiateVersion"])
+	token, ok := negotiate["connectionToken"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, token)
+
+	wsURL := fmt.Sprintf("ws://localhost:%d/hub?id=%s", port, token)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	//nolint:errcheck
+	defer conn.Close() //nolint:errcheck
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"protocol":"json","version":1}`)))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, hs, err := conn.ReadMessage()
+	require.NoError(t, err)
+	assert.Equal(t, "{}\x1e", string(hs))
+
+	select {
+	case err := <-errCh:
+		if err != nil && err.Error() != "signal: terminated" {
+			t.Logf("server process exited with error: %v", err)
+		}
+	default:
 	}
 }

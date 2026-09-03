@@ -1108,3 +1108,123 @@ func TestCLIIntegrationTestLocation(t *testing.T) {
 	// Optional: verify we're in test/cli directory
 	// This test passes by virtue of being in the correct location.
 }
+
+/*
+Scenario: CLI accepts AsyncAPI files with no flag changes
+Given the oasmock binary and an AsyncAPI file with an http binding
+When invoked with --from <asyncapi.yaml>
+Then the server starts and serves the channel under the prefix
+
+Related spec scenarios: RS.CLI.30, RS.CLI.31, RS.ASP.1
+*/
+func TestCLIAsyncAPIAccepted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	port := clihelper.FindFreePort(t)
+	dir := t.TempDir()
+	async := filepath.Join(dir, "asyncapi.yaml")
+	err := os.WriteFile(async, []byte(`asyncapi: 3.0.0
+info:
+  title: HTTP Events
+  version: 1.0.0
+channels:
+  employees:
+    address: /employees
+    messages:
+      emplMsg:
+        examples:
+          - payload:
+              id: 1
+operations:
+  getEmployees:
+    action: send
+    channel:
+      $ref: '#/channels/employees'
+    bindings:
+      http:
+        method: GET
+`), 0644)
+	require.NoError(t, err)
+
+	cmd := exec.Command(binaryPath(t), "mock", "--from", async, "--port", fmt.Sprintf("%d", port))
+	stderrPipe, err := cmd.StderrPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start(), "failed to start mock command")
+
+	outputChan := make(chan string)
+	go func() {
+		var acc strings.Builder
+		buf := make([]byte, 1024)
+		for {
+			n, err := stderrPipe.Read(buf)
+			if n > 0 {
+				acc.Write(buf[:n])
+				if strings.Contains(acc.String(), "Mock server started") {
+					outputChan <- acc.String()
+					return
+				}
+			}
+			if err != nil {
+				outputChan <- acc.String()
+				return
+			}
+		}
+	}()
+	select {
+	case output := <-outputChan:
+		assert.Contains(t, output, "Mock server started", "mock command did not start with AsyncAPI: %s", output)
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "timeout waiting for mock output")
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+}
+
+/*
+Scenario: CLI fails with exit code 3 on an invalid AsyncAPI file
+Given the oasmock binary and an AsyncAPI file with unsupported protocol bindings
+When invoked with --from <invalid-asyncapi.yaml>
+Then the process exits with code 3
+
+Related spec scenarios: RS.CLI.16, RS.AAL.8, RS.ASP.4
+*/
+func TestCLIAsyncAPIInvalidExitCode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad-asyncapi.yaml")
+	err := os.WriteFile(bad, []byte(`asyncapi: 3.0.0
+info:
+  title: Kafka
+  version: 1.0.0
+channels:
+  k:
+    address: topic
+    bindings:
+      kafka:
+        topic: events
+    messages:
+      msg:
+        examples:
+          - payload: {}
+operations:
+  receiveK:
+    action: receive
+    channel:
+      $ref: '#/channels/k'
+`), 0644)
+	require.NoError(t, err)
+
+	cmd := exec.Command(binaryPath(t), "mock", "--from", bad, "--port", fmt.Sprintf("%d", clihelper.FindFreePort(t)))
+	err = cmd.Run()
+	require.Error(t, err)
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok)
+	assert.Equal(t, 3, exitErr.ExitCode())
+}
