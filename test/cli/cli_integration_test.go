@@ -2,11 +2,13 @@ package cli_test
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -19,6 +21,61 @@ import (
 
 func binaryPath(t *testing.T) string {
 	return binhelper.GetBuilded(t)
+}
+
+// captureUntil reads from a command's output pipe until every want substring
+// has been observed or the timeout elapses, returning all output captured. It
+// replaces the former single-timed-read capture that raced with slower process
+// startup in CI (only the first flushed log line was observed).
+func captureUntil(t *testing.T, pipe io.ReadCloser, timeout time.Duration, want ...string) string {
+	t.Helper()
+	var (
+		mu sync.Mutex
+		sb strings.Builder
+	)
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, err := pipe.Read(buf)
+			if n > 0 {
+				mu.Lock()
+				sb.Write(buf[:n])
+				mu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			mu.Lock()
+			cur := sb.String()
+			mu.Unlock()
+			if containsAll(cur, want) {
+				return cur
+			}
+		case <-deadline:
+			mu.Lock()
+			cur := sb.String()
+			mu.Unlock()
+			_ = pipe.Close() // unblock the reader goroutine
+			return cur
+		}
+	}
+}
+
+func containsAll(s string, subs []string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }
 
 /*
@@ -85,24 +142,9 @@ func TestCLIEnvVarOverride(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 	// Read output with a short timeout
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Mock server started", "env var override not reflected in output: %s", output)
-		assert.Contains(t, output, "port=9999", "env var override not reflected in output: %s", output)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started", "port=9999")
+	assert.Contains(t, output, "Mock server started", "env var override not reflected in output: %s", output)
+	assert.Contains(t, output, "port=9999", "env var override not reflected in output: %s", output)
 	// Kill the process
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
@@ -134,24 +176,8 @@ func TestCLIEnvVarVerbose(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Registered route", "env var override not reflected in output: %s", output)
-		// verbose flag may not be logged; debug logs indicate verbose enabled
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Registered route")
+	assert.Contains(t, output, "Registered route", "env var override not reflected in output: %s", output)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }
@@ -182,24 +208,9 @@ func TestCLIEnvVarNoCORS(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Mock server started", "env var override not reflected in output: %s", output)
-		// cors flag may not be logged; we'll verify via request header check
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started")
+	assert.Contains(t, output, "Mock server started", "env var override not reflected in output: %s", output)
+	// cors flag may not be logged; we'll verify via request header check
 	// Wait for server to be ready
 	time.Sleep(200 * time.Millisecond)
 	// Make a request and verify no CORS headers
@@ -235,23 +246,8 @@ func TestCLISuccessfulExitCode(t *testing.T) {
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
 	// Wait for server to start and verify output
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Mock server started", "server did not start: %s", output)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started")
+	assert.Contains(t, output, "Mock server started", "server did not start: %s", output)
 	// Send SIGTERM
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM), "failed to send SIGTERM")
 	// Wait for process to exit
@@ -310,25 +306,10 @@ func TestCLINoArguments(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	// Read output with a short timeout
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
-		assert.Contains(t, output, "port=19191", "default port not used: %s", output)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	// Read output until the server starts (polling, not a single timed read)
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started", "port=19191")
+	assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
+	assert.Contains(t, output, "port=19191", "default port not used: %s", output)
 	// Kill the process
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
@@ -378,24 +359,9 @@ func TestCLICustomPort(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
-		assert.Contains(t, output, fmt.Sprintf("port=%d", port), "custom port not used: %s", output)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started", fmt.Sprintf("port=%d", port))
+	assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
+	assert.Contains(t, output, fmt.Sprintf("port=%d", port), "custom port not used: %s", output)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }
@@ -425,24 +391,9 @@ func TestCLIMultipleSchemas(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
-		assert.Contains(t, output, fmt.Sprintf("port=%d", port), "port not shown: %s", output)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started", fmt.Sprintf("port=%d", port))
+	assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
+	assert.Contains(t, output, fmt.Sprintf("port=%d", port), "port not shown: %s", output)
 	// Verify both prefixes work (make HTTP requests)
 	// Wait a bit for server to be ready
 	time.Sleep(200 * time.Millisecond)
@@ -484,24 +435,9 @@ func TestCLIDelay(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
-		// delay flag may not be logged; server starting is sufficient
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started")
+	assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
+	// delay flag may not be logged; server starting is sufficient
 	// Verify delay by making a request and measuring response time
 	// This is tricky; we could skip for now
 	_ = cmd.Process.Kill()
@@ -530,24 +466,8 @@ func TestCLIVerbose(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Registered route", "mock command not executed: %s", output)
-		// verbose flag may not be logged; debug logs indicate verbose enabled
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Registered route")
+	assert.Contains(t, output, "Registered route", "mock command not executed: %s", output)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }
@@ -574,24 +494,9 @@ func TestCLINoCORS(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
-		// cors flag may not be logged; we'll verify via request header check
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started")
+	assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
+	// cors flag may not be logged; we'll verify via request header check
 	// Wait for server to be ready
 	time.Sleep(200 * time.Millisecond)
 	// Make a request and verify no CORS headers
@@ -644,23 +549,8 @@ func TestCLIDefaultSchema(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started")
+	assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
 	// Wait for server to be ready
 	time.Sleep(200 * time.Millisecond)
 	// Make a request to verify server works with default schema
@@ -786,26 +676,8 @@ verbose true`
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		// Should still start on default port (19191)
-		assert.Contains(t, output, "port=19191", "default port not used when config file malformed: %s", output)
-		// Should contain warning about config file (but warning may be at DEBUG level)
-		// We'll just ensure server starts
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "port=19191")
+	assert.Contains(t, output, "port=19191", "default port not used when config file malformed: %s", output)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }
@@ -847,23 +719,8 @@ func TestCLIConfigFileMissing(t *testing.T) {
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "port=19191", "default port not used when config file missing: %s", output)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "port=19191")
+	assert.Contains(t, output, "port=19191", "default port not used when config file missing: %s", output)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }
@@ -907,24 +764,9 @@ schemas:
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "port=9090", "CLI flag did not override config file: %s", output)
-		assert.NotContains(t, output, "port=8080", "Config file value incorrectly used: %s", output)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "port=9090")
+	assert.Contains(t, output, "port=9090", "CLI flag did not override config file: %s", output)
+	assert.NotContains(t, output, "port=8080", "Config file value incorrectly used: %s", output)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }
@@ -969,24 +811,9 @@ schemas:
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var lines []string
-		buf := make([]byte, 1024)
-		time.Sleep(100 * time.Millisecond)
-		n, _ := stderrPipe.Read(buf)
-		if n > 0 {
-			lines = append(lines, string(buf[:n]))
-		}
-		outputChan <- strings.Join(lines, "")
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "port=7070", "environment variable did not override config file: %s", output)
-		assert.NotContains(t, output, "port=8080", "Config file value incorrectly used: %s", output)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "port=7070")
+	assert.Contains(t, output, "port=7070", "environment variable did not override config file: %s", output)
+	assert.NotContains(t, output, "port=8080", "Config file value incorrectly used: %s", output)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }

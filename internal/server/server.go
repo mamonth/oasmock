@@ -309,7 +309,7 @@ func (s *Server) setupRouter() {
 }
 
 func (s *Server) registerMockRoutes(r chi.Router) {
-	slog.Info("registerMockRoutes called", "verbose", s.config.Verbose, "numMappings", len(s.mappings))
+	slog.Debug("registerMockRoutes called", "verbose", s.config.Verbose, "numMappings", len(s.mappings))
 
 	rpcChiPatterns := make(map[string]bool)
 	for _, m := range s.rpcMappings {
