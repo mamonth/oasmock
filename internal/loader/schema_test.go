@@ -8,12 +8,12 @@ import (
 )
 
 /*
-Scenario: Loading single OpenAPI schema from file
-Given a file path to an OpenAPI YAML
+Scenario: Loading single schema from file
+Given a file path to an OpenAPI or AsyncAPI YAML
 When loadSingleSchema is called
-Then it returns parsed spec or error for missing/invalid files
+Then it returns the parsed spec with the correct kind or error for missing/invalid files
 
-Related spec scenarios: RS.MSC.1, RS.MSC.3
+Related spec scenarios: RS.MSC.1, RS.MSC.3, RS.AAL.1
 */
 func TestLoadSingleSchema(t *testing.T) {
 	t.Parallel()
@@ -22,19 +22,32 @@ func TestLoadSingleSchema(t *testing.T) {
 		name        string
 		path        string
 		wantErr     bool
+		wantKind    Kind
 		errContains string
 	}{
 		{
-			name:        "valid OpenAPI YAML",
-			path:        "../../test/_shared/resources/test.yaml",
-			wantErr:     false,
-			errContains: "",
+			name:     "valid OpenAPI YAML",
+			path:     "../../test/_shared/resources/test.yaml",
+			wantErr:  false,
+			wantKind: KindOpenAPI,
 		},
 		{
-			name:        "control API OpenAPI YAML",
-			path:        "../../api/openapi.yaml",
-			wantErr:     false,
-			errContains: "",
+			name:     "control API OpenAPI YAML",
+			path:     "../../api/openapi.yaml",
+			wantErr:  false,
+			wantKind: KindOpenAPI,
+		},
+		{
+			name:     "valid AsyncAPI 3.0.0 YAML",
+			path:     "../../test/_shared/resources/asyncapi-30.yaml",
+			wantErr:  false,
+			wantKind: KindAsyncAPI,
+		},
+		{
+			name:     "valid AsyncAPI 3.1.0 YAML",
+			path:     "../../test/_shared/resources/asyncapi-31.yaml",
+			wantErr:  false,
+			wantKind: KindAsyncAPI,
 		},
 		{
 			name:        "non-existent file",
@@ -46,7 +59,19 @@ func TestLoadSingleSchema(t *testing.T) {
 			name:        "invalid OpenAPI content",
 			path:        "../../test/_shared/resources/test-invalid.yaml",
 			wantErr:     true,
-			errContains: "invalid OpenAPI schema",
+			errContains: "not a valid OpenAPI or AsyncAPI schema",
+		},
+		{
+			name:        "non-spec file",
+			path:        "../../test/_shared/resources/not-a-spec.yaml",
+			wantErr:     true,
+			errContains: "neither an 'openapi' nor an 'asyncapi' root key",
+		},
+		{
+			name:        "unsupported asyncapi version",
+			path:        "../../test/_shared/resources/asyncapi-26.yaml",
+			wantErr:     true,
+			errContains: "unsupported AsyncAPI version",
 		},
 	}
 
@@ -54,7 +79,7 @@ func TestLoadSingleSchema(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			spec, err := loadSingleSchema(tt.path)
+			info, err := loadSingleSchema(tt.path)
 			if tt.wantErr {
 				require.Error(t, err)
 				if tt.errContains != "" {
@@ -63,7 +88,53 @@ func TestLoadSingleSchema(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.NotNil(t, spec)
+			assert.Equal(t, tt.wantKind, info.Kind)
+			if tt.wantKind == KindOpenAPI {
+				assert.NotNil(t, info.Spec)
+			} else {
+				assert.NotNil(t, info.Async)
+			}
+		})
+	}
+}
+
+/*
+Scenario: Detecting the spec kind from raw bytes
+Given raw YAML/JSON bytes with an openapi or asyncapi root key
+When detectKind is called
+Then it returns the matching kind, and an error for files with neither key
+
+Related spec scenarios: RS.AAL.1, RS.AAL.2, RS.AAL.4
+*/
+func TestDetectKind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		data    string
+		want    Kind
+		wantErr bool
+	}{
+		{name: "openapi yaml", data: "openapi: 3.0.0\ninfo:\n  title: x\n  version: 1.0.0\n", want: KindOpenAPI},
+		{name: "asyncapi yaml", data: "asyncapi: 3.0.0\ninfo:\n  title: x\n  version: 1.0.0\n", want: KindAsyncAPI},
+		{name: "openapi json", data: `{"openapi":"3.0.0","info":{"title":"x","version":"1.0.0"}}`, want: KindOpenAPI},
+		{name: "asyncapi json", data: `{"asyncapi":"3.0.0","info":{"title":"x","version":"1.0.0"}}`, want: KindAsyncAPI},
+		{name: "neither key", data: "foo: bar\n", wantErr: true},
+		{name: "empty", data: "", wantErr: true},
+		{name: "garbage", data: "{{{", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			kind, err := detectKind([]byte(tt.data))
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, kind)
 		})
 	}
 }
@@ -122,6 +193,12 @@ func TestLoadSchemas(t *testing.T) {
 			prefixes: []string{""},
 			wantErr:  true,
 		},
+		{
+			name:     "mixing openapi and asyncapi sources",
+			sources:  []string{"../../test/_shared/resources/test.yaml", "../../test/_shared/resources/asyncapi-30.yaml"},
+			prefixes: []string{"/v1", "/v2"},
+			wantErr:  false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -139,6 +216,10 @@ func TestLoadSchemas(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, infos, len(tt.sources))
 			for i, info := range infos {
+				if info.Kind == KindAsyncAPI {
+					assert.NotNil(t, info.Async, "info[%d].Async is nil", i)
+					continue
+				}
 				assert.NotNil(t, info.Spec, "info[%d].Spec is nil", i)
 				expectedPrefix := ""
 				if i < len(tt.prefixes) {

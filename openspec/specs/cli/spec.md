@@ -18,7 +18,7 @@ The CLI SHALL provide a command-line interface with global options and subcomman
 - **THEN** the tool prints global help text describing available commands and options
 
 ### Requirement: Mock command
-The mock command SHALL start an HTTP mock server based on OpenAPI schema(s) using extensions described in extensions.md.
+The mock command SHALL start a mock server based on OpenAPI and/or AsyncAPI schema(s), using the extensions described in extensions.md.
 
 #### Scenario RS.CLI.4: Starting mock server with default schema
 - **WHEN** user runs `oasmock`
@@ -48,6 +48,23 @@ The mock command SHALL start an HTTP mock server based on OpenAPI schema(s) usin
 - **WHEN** user runs `oasmock --help` or `oasmock -h`
 - **THEN** the tool prints help text for the mock command including all options
 
+#### Scenario RS.CLI.30: Starting mock server with an AsyncAPI spec
+- **WHEN** user runs `oasmock --from api/asyncapi.yaml`
+- **THEN** the server auto-detects the AsyncAPI 3.x spec and serves its channels
+
+#### Scenario RS.CLI.31: Mixing OpenAPI and AsyncAPI via config file
+- **WHEN** a `.oasmock.yaml` file contains:
+  ```yaml
+  schemas:
+    - src: openapi.yaml
+    - src: asyncapi.yaml
+  ```
+- **THEN** the CLI loads both, auto-detecting each specification type
+
+#### Scenario RS.CLI.32: Binding an ephemeral port
+- **WHEN** user runs `oasmock --port 0`
+- **THEN** the server binds an OS-assigned port and logs the actual bound port under `port=`
+
 ### Requirement: Environment variable overrides
 The CLI SHALL support configuration sources with the following precedence: command-line arguments > environment variables > configuration file > defaults. Environment variables SHALL override configuration file values but be overridden by command-line arguments.
 
@@ -64,7 +81,7 @@ The CLI SHALL support configuration sources with the following precedence: comma
 - **THEN** the server disables CORS headers (unless a CLI flag overrides)
 
 ### Requirement: Exit codes
-The CLI SHALL return appropriate exit codes as defined in [cli.md](../../../../cli.md).
+The CLI SHALL return appropriate exit codes as defined in cli.md, extending the schema-failure code to AsyncAPI specifications.
 
 #### Scenario RS.CLI.14: Successful execution
 - **WHEN** the mock server starts successfully
@@ -75,7 +92,7 @@ The CLI SHALL return appropriate exit codes as defined in [cli.md](../../../../c
 - **THEN** the CLI exits with code 2
 
 #### Scenario RS.CLI.16: Schema loading or validation failure
-- **WHEN** the OpenAPI schema cannot be loaded or is invalid
+- **WHEN** an OpenAPI or AsyncAPI schema cannot be loaded or is invalid
 - **THEN** the CLI exits with code 3
 
 #### Scenario RS.CLI.17: Port already in use

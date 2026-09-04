@@ -14,9 +14,9 @@ oasmock [options]
 
 | Option             | Type      | Default            | Description                                                              |
 |--------------------|-----------|--------------------|--------------------------------------------------------------------------|
-| `--from`           | string    | `src/openapi.yaml` | Source OpenAPI schema. Can be specified multiple times.                  |
+| `--from`           | string    | `src/openapi.yaml` | Source OpenAPI or AsyncAPI schema (autodetected by root key). Can be specified multiple times.                  |
 | `--prefix`         | string    | `''`               | URI prefix for the schema. Can be specified for each `--from` parameter. |
-| `--port`           | number    | `19191`            | Port to listen on.                                                       |
+| `--port`           | number    | `19191`            | Port to listen on. Use `0` to bind an OS-assigned (ephemeral) port; the actual bound port is logged under `port=` after startup. |
 | `--delay`          | number    | `100`              | Delay between request and response in milliseconds.                      |
 | `--verbose`        | boolean   | `false`            | Enable verbose logging.                                                  |
 | `--nocors`         | boolean   | `false`            | Disable automatic CORS compliance.                                       |
@@ -51,13 +51,15 @@ The CLI can read configuration from a `.oasmock.yaml` file in the current workin
 
 | Key               | Type                | Description                                                              |
 |-------------------|---------------------|--------------------------------------------------------------------------|
-| `schemas`         | list                | Multiple schemas, each either a string (path) or object with `src` and optional `prefix`. |
+| `schemas`         | list                | Multiple schemas (OpenAPI or AsyncAPI — autodetected), each either a string (path) or object with `src` and optional `prefix`. |
 | `port`            | number              | Port to listen on.                                                       |
 | `delay`           | number              | Delay between request and response in milliseconds.                      |
 | `verbose`         | boolean             | Enable verbose logging.                                                  |
 | `nocors`          | boolean             | Disable automatic CORS compliance.                                       |
 | `history_size`    | number              | Maximum number of requests to keep in history.                           |
 | `no_control_api`  | boolean             | Disable the management control API.                                      |
+
+**Schema types:** each `--from`/`schemas` entry may reference an OpenAPI (`openapi:` root key) or AsyncAPI (`asyncapi:` root key, 3.0.0/3.1.0) file. Spec type is detected automatically from the root version key — no flags change. Mixed OpenAPI + AsyncAPI sources can be served together.
 
 **Examples:**
 

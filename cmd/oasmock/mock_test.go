@@ -68,6 +68,43 @@ func TestPortError(t *testing.T) {
 }
 
 /*
+Scenario: Validating the port flag value
+Given a port number
+When validatePort is called
+Then out-of-range values (below 1 or above 65535) are rejected and port 0 (ephemeral) is accepted
+
+Related spec scenarios: RS.CLI.15, RS.CLI.32
+*/
+func TestValidatePort(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name    string
+		port    int
+		wantErr bool
+	}{
+		{name: "default port", port: 19191},
+		{name: "custom port", port: 8080},
+		{name: "ephemeral port", port: 0},
+		{name: "lower bound", port: 1},
+		{name: "upper bound", port: 65535},
+		{name: "below range", port: -1, wantErr: true},
+		{name: "above range", port: 65536, wantErr: true},
+	} {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validatePort(tt.port)
+			if tt.wantErr {
+				assert.Error(t, err, "expected validation error for port %d", tt.port)
+			} else {
+				assert.NoError(t, err, "unexpected validation error for port %d", tt.port)
+			}
+		})
+	}
+}
+
+/*
 Scenario: CLI error type behavior
 Given a cliError instance with code and message
 When Error() is called
@@ -117,7 +154,7 @@ func TestRunMockValidationErrors(t *testing.T) {
 			setup: func() {
 				config = mockConfig{}
 				viper.Reset()
-				viper.Set("port", 0)
+				viper.Set("port", -1)
 			},
 			checkError: func(t *testing.T, err error) {
 				require.Error(t, err, "expected validation error for invalid port")

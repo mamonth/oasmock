@@ -43,7 +43,7 @@ func TestSelectDynamicExampleExpiry(t *testing.T) {
 
 	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 	key := "GET /test"
-	server.dynamicExamples = map[string][]dynamicExample{
+	server.registry.dynamicExamples = map[string][]dynamicExample{
 		key: {
 			dynExample(1, time.Now().Add(-2*time.Second), "expired"),
 			dynExample(3600, time.Now(), "alive"),
@@ -70,7 +70,7 @@ func TestSelectDynamicExampleZeroTTLNeverExpires(t *testing.T) {
 
 	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 	key := "GET /test"
-	server.dynamicExamples = map[string][]dynamicExample{
+	server.registry.dynamicExamples = map[string][]dynamicExample{
 		key: {
 			dynExample(0, time.Now().Add(-10*time.Hour), "no-ttl"),
 		},
@@ -99,7 +99,7 @@ func TestSelectDynamicExampleOnceWithTTL(t *testing.T) {
 	ex := dynExample(3600, time.Now(), "once-ttl")
 	ex.once = true
 	ex.onceID = "once-ttl"
-	server.dynamicExamples = map[string][]dynamicExample{key: {ex}}
+	server.registry.dynamicExamples = map[string][]dynamicExample{key: {ex}}
 
 	mapping := &RouteMapping{Method: "GET", ChiPattern: "/test"}
 
@@ -123,7 +123,7 @@ func TestSweepExpiredExamples(t *testing.T) {
 	t.Parallel()
 
 	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
-	server.dynamicExamples = map[string][]dynamicExample{
+	server.registry.dynamicExamples = map[string][]dynamicExample{
 		"GET /a": {
 			dynExample(1, time.Now().Add(-2*time.Second), "expired"),
 			dynExample(3600, time.Now(), "alive"),
@@ -136,9 +136,9 @@ func TestSweepExpiredExamples(t *testing.T) {
 
 	server.sweepExpiredExamples()
 
-	server.dyMu.RLock()
-	defer server.dyMu.RUnlock()
-	got := server.dynamicExamples
+	server.registry.dyMu.RLock()
+	defer server.registry.dyMu.RUnlock()
+	got := server.registry.dynamicExamples
 
 	require.Len(t, got["GET /a"], 2, "only the expired example should be removed")
 	assert.Equal(t, "alive", got["GET /a"][0].response.body)
@@ -162,14 +162,14 @@ func TestSweepExpiredExamplesCleansOnceExamples(t *testing.T) {
 	ex := dynExample(1, time.Now().Add(-2*time.Second), "once-expired")
 	ex.once = true
 	ex.onceID = "once-expired"
-	server.dynamicExamples = map[string][]dynamicExample{key: {ex}}
-	server.onceExamples = map[string]bool{ex.onceID: true}
+	server.registry.dynamicExamples = map[string][]dynamicExample{key: {ex}}
+	server.registry.onceExamples = map[string]bool{ex.onceID: true}
 
 	server.sweepExpiredExamples()
 
-	server.onceMu.RLock()
-	_, ok := server.onceExamples[ex.onceID]
-	server.onceMu.RUnlock()
+	server.registry.onceMu.RLock()
+	_, ok := server.registry.onceExamples[ex.onceID]
+	server.registry.onceMu.RUnlock()
 	assert.False(t, ok, "onceExamples entry should be removed for swept example")
 }
 
@@ -195,7 +195,7 @@ func TestSweepDoesNotReuseConsumedOnceExample(t *testing.T) {
 	alive.once = true
 	alive.onceID = "once-B"
 
-	server.dynamicExamples = map[string][]dynamicExample{key: {expired, alive}}
+	server.registry.dynamicExamples = map[string][]dynamicExample{key: {expired, alive}}
 
 	// Both examples are consumed before the expired one is swept.
 	server.markOnceUsed(expired.onceID)
@@ -256,7 +256,7 @@ func TestHandleAddExampleWithTTL(t *testing.T) {
 				Pattern:    "/test",
 				ChiPattern: "/test",
 			}}
-			server.dynamicExamples = make(map[string][]dynamicExample)
+			server.registry.dynamicExamples = make(map[string][]dynamicExample)
 
 			req := httptest.NewRequest("POST", "/_mock/examples", strings.NewReader(tt.reqBody))
 			w := httptest.NewRecorder()
@@ -266,10 +266,10 @@ func TestHandleAddExampleWithTTL(t *testing.T) {
 			assert.Equal(t, http.StatusOK, w.Code, "expected success response")
 
 			key := "GET /test"
-			server.dyMu.RLock()
-			defer server.dyMu.RUnlock()
-			require.Len(t, server.dynamicExamples[key], 1, "example should be stored")
-			stored := server.dynamicExamples[key][0]
+			server.registry.dyMu.RLock()
+			defer server.registry.dyMu.RUnlock()
+			require.Len(t, server.registry.dynamicExamples[key], 1, "example should be stored")
+			stored := server.registry.dynamicExamples[key][0]
 			assert.Equal(t, tt.wantTTL, stored.ttl, "ttl should be stored on example")
 			if tt.wantAddedAtSet {
 				assert.False(t, stored.addedAt.IsZero(), "addedAt should be set for ttl > 0")
@@ -298,7 +298,7 @@ func TestHandleAddExampleRejectsNegativeTTL(t *testing.T) {
 		Pattern:    "/test",
 		ChiPattern: "/test",
 	}}
-	server.dynamicExamples = make(map[string][]dynamicExample)
+	server.registry.dynamicExamples = make(map[string][]dynamicExample)
 
 	req := httptest.NewRequest("POST", "/_mock/examples", strings.NewReader(`{"path":"/test","response":{"code":200},"ttl":-1}`))
 	w := httptest.NewRecorder()
@@ -321,25 +321,25 @@ func TestTTLSweepStartsAndStops(t *testing.T) {
 	t.Parallel()
 
 	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
-	require.NotNil(t, server.sweepCancel, "sweep should be initialized on server creation")
+	require.NotNil(t, server.registry.sweepCancel, "sweep should be initialized on server creation")
 
 	// Verify the background sweep goroutine runs: add an expired example and
 	// expect it to be removed by the background sweep.
 	key := "GET /test"
-	server.dynamicExamples = map[string][]dynamicExample{
+	server.registry.dynamicExamples = map[string][]dynamicExample{
 		key: {dynExample(1, time.Now().Add(-2*time.Second), "expired")},
 	}
 
 	require.Eventually(t, func() bool {
-		server.dyMu.RLock()
-		defer server.dyMu.RUnlock()
-		_, ok := server.dynamicExamples[key]
+		server.registry.dyMu.RLock()
+		defer server.registry.dyMu.RUnlock()
+		_, ok := server.registry.dynamicExamples[key]
 		return !ok
 	}, 3*time.Second, 50*time.Millisecond, "sweep goroutine should remove the expired example")
 
 	// Shutdown cancels the sweep.
 	require.NoError(t, server.Shutdown(context.Background()))
-	assert.Equal(t, context.Canceled, server.sweepCtx.Err(), "sweep context should be cancelled on shutdown")
+	assert.Equal(t, context.Canceled, server.registry.sweepCtx.Err(), "sweep context should be cancelled on shutdown")
 }
 
 /*
@@ -369,7 +369,7 @@ func TestConcurrentSelectAndSweepNoDataRace(t *testing.T) {
 			examples = append(examples, dynExample(3600, time.Now(), i))
 		}
 	}
-	server.dynamicExamples = map[string][]dynamicExample{key: examples}
+	server.registry.dynamicExamples = map[string][]dynamicExample{key: examples}
 
 	mapping := &RouteMapping{Method: "GET", ChiPattern: "/test"}
 

@@ -1,14 +1,15 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/history"
 	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/mamonth/oasmock/internal/runtime"
@@ -68,6 +70,22 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
+// Hijack preserves the underlying connection so WebSocket upgrades work even
+// when request history recording is active.
+func (r *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := r.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
+}
+
+// Flush forwards flush calls to the underlying writer when supported.
+func (r *responseRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // Config holds server configuration.
 type Config struct {
 	Port             int
@@ -80,26 +98,27 @@ type Config struct {
 
 // Server represents the mock HTTP server.
 type Server struct {
-	config          Config
-	router          *chi.Mux
-	httpServer      *http.Server
-	httpMu          sync.Mutex
-	shutdownOnce    sync.Once
-	shutdownResult  error
-	mappings        []RouteMapping
-	stateStore      StateStore
-	historyStore    HistoryStore
-	routeMap        map[string]*RouteMapping
-	onceExamples    map[string]bool
-	onceMu          sync.RWMutex
-	dynamicExamples map[string][]dynamicExample
-	dyMu            sync.RWMutex
-	sweepCtx        context.Context
-	sweepCancel     context.CancelFunc
-	deps            Dependencies
-	rpcHandler      *RpcHandler
-	rpcMappings     []*loader.RpcRouteMapping
-	gatewayPath     string
+	config           Config
+	router           *chi.Mux
+	httpServer       *http.Server
+	httpMu           sync.Mutex
+	shutdownOnce     sync.Once
+	shutdownResult   error
+	mappings         []RouteMapping
+	stateStore       StateStore
+	historyStore     HistoryStore
+	routeMap         map[string]*RouteMapping
+	registry         *exampleRegistry
+	engine           *exampleEngine
+	deps             Dependencies
+	rpcHandler       *RpcHandler
+	rpcMappings      []*loader.RpcRouteMapping
+	gatewayPath      string
+	protocolAdapters map[string]ProtocolAdapter
+	routerSetupErr   error
+	hubMgr           *hubManager
+	eventBus         *eventBus
+	scheduler        *pushScheduler
 }
 
 // New creates a new mock server with the given configuration and loaded schemas.
@@ -109,9 +128,14 @@ func New(config Config, schemas []loader.SchemaInfo) (*Server, error) {
 	for i, schema := range schemas {
 		serverSchemas[i] = SchemaInfo{
 			Spec:   schema.Spec,
+			Kind:   schema.Kind,
+			Async:  schema.Async,
 			Prefix: schema.Prefix,
 		}
 
+		if schema.Kind == loader.KindAsyncAPI {
+			continue
+		}
 		if rpcConfig == nil {
 			var err error
 			rpcConfig, err = loader.ParseRpcConfig(schema.Spec)
@@ -167,17 +191,23 @@ func NewWithDependencies(config Config, schemas []SchemaInfo, deps Dependencies,
 		config.HistorySize = DefaultHistorySize
 	}
 
+	registry := newExampleRegistry(config.Verbose)
 	s := &Server{
-		config:          config,
-		mappings:        mappings,
-		stateStore:      deps.StateStore,
-		historyStore:    deps.HistoryStore,
-		deps:            deps,
-		routeMap:        make(map[string]*RouteMapping),
-		onceExamples:    make(map[string]bool),
-		dynamicExamples: make(map[string][]dynamicExample),
-		rpcMappings:     rpcMappings,
+		config:           config,
+		mappings:         mappings,
+		stateStore:       deps.StateStore,
+		historyStore:     deps.HistoryStore,
+		deps:             deps,
+		routeMap:         make(map[string]*RouteMapping),
+		registry:         registry,
+		engine:           newExampleEngine(config, deps, registry),
+		rpcMappings:      rpcMappings,
+		protocolAdapters: defaultProtocolAdapters(),
 	}
+	s.hubMgr = newHubManager(s.engine, s.protocolAdapters[asyncWSProtocol].(*wsProtocolAdapter), schemas)
+	s.eventBus = newEventBus(s.engine, s.hubMgr, config.Verbose)
+	s.eventBus.registerEventSubscriptions(schemas)
+	s.scheduler = newPushScheduler(func(channel string, payload []byte) { s.pushToChannel(channel, "", payload) })
 
 	if rpcConfig != nil {
 		proto, err := newRpcProtocol(rpcConfig)
@@ -211,8 +241,11 @@ func NewWithDependencies(config Config, schemas []SchemaInfo, deps Dependencies,
 
 	s.setupRouter()
 
-	s.sweepCtx, s.sweepCancel = context.WithCancel(context.Background())
-	s.startTTLSweep()
+	if err := s.routerSetupErr; err != nil {
+		return nil, err
+	}
+
+	s.registry.startSweep()
 	return s, nil
 }
 
@@ -256,6 +289,9 @@ func (s *Server) setupRouter() {
 	// Register mock routes
 	s.registerMockRoutes(r)
 
+	// Register SignalR hubs (negotiate + upgrade)
+	s.registerSignalRHubs(r)
+
 	// Register RPC gateway route if configured
 	if s.rpcHandler != nil {
 		r.Post(s.gatewayPath, s.rpcHandler.ServeHTTP)
@@ -273,7 +309,7 @@ func (s *Server) setupRouter() {
 }
 
 func (s *Server) registerMockRoutes(r chi.Router) {
-	slog.Info("registerMockRoutes called", "verbose", s.config.Verbose, "numMappings", len(s.mappings))
+	slog.Debug("registerMockRoutes called", "verbose", s.config.Verbose, "numMappings", len(s.mappings))
 
 	rpcChiPatterns := make(map[string]bool)
 	for _, m := range s.rpcMappings {
@@ -288,21 +324,49 @@ func (s *Server) registerMockRoutes(r chi.Router) {
 		key := routeKey(mapping.Method, mapping.ChiPattern)
 		s.routeMap[key] = mapping
 
+		handler, err := s.buildRouteHandler(mapping)
+		if err != nil {
+			s.routerSetupErr = err
+			slog.Error("Failed to register route", "pattern", mapping.ChiPattern, "err", err)
+			return
+		}
+
 		if s.config.Verbose {
 			slog.Info("XXXRegistering route", "method", mapping.Method, "chiPattern", mapping.ChiPattern, "fullPath", mapping.Path, "prefix", mapping.Prefix, "pattern", mapping.Pattern, "responses", mapping.Responses != nil)
 		}
-		r.Method(mapping.Method, mapping.ChiPattern, s.makeMockHandler(mapping))
+		r.Method(mapping.Method, mapping.ChiPattern, handler)
 
 		if s.config.Verbose {
 			slog.Debug("Registered route", "method", mapping.Method, "pattern", mapping.ChiPattern)
 		}
 	}
+}
 
+// buildRouteHandler dispatches AsyncAPI routes to their protocol adapter and
+// falls back to the OpenAPI pipeline for regular routes (design D4).
+func (s *Server) buildRouteHandler(mapping *RouteMapping) (http.HandlerFunc, error) {
+	if mapping.Protocol == "" {
+		return s.makeMockHandler(mapping), nil
+	}
+	adapter := s.adapterForProtocol(mapping.Protocol)
+	if adapter == nil {
+		return nil, fmt.Errorf("channel protocol %q is not supported (supported: http, ws)", mapping.Protocol)
+	}
+	if s.config.Verbose {
+		slog.Debug("Using protocol adapter", "protocol", mapping.Protocol, "pattern", mapping.ChiPattern)
+	}
+	return adapter.Handler(mapping, s.asyncMessageHandler(mapping)), nil
 }
 
 func (s *Server) registerManagementRoutes(r chi.Router) {
 	r.Post("/_mock/examples", s.handleAddExample)
 	r.Get("/_mock/requests", s.handleGetRequests)
+	r.Post("/_mock/events/fire", s.handleFireEvent)
+	r.Post("/_mock/ws/push", s.handleAsyncPush)
+	r.Get("/_mock/ws/consumers", s.handleAsyncConsumers)
+	r.Post("/_mock/ws/schedule", s.handleAsyncSchedule)
+	r.Delete("/_mock/ws/schedule/{pushId}", s.handleAsyncScheduleStop)
+	r.Post("/_mock/ws/disconnect", s.handleAsyncDisconnect)
 }
 
 func (s *Server) newRequestSource(r *http.Request, pathParams map[string]string) *runtime.RequestSource {
@@ -345,21 +409,11 @@ func (s *Server) newRequestSource(r *http.Request, pathParams map[string]string)
 }
 
 func (s *Server) newStateSource(prefix string) *runtime.StateSource {
-	data := s.stateStore.GetNamespace(prefix)
-	if data == nil {
-		data = make(map[string]any)
-	}
-	return &runtime.StateSource{Data: data}
+	return s.engine.NewStateSource(prefix)
 }
 
 func (s *Server) newEnvSource() *runtime.EnvSource {
-	env := make(map[string]string)
-	for _, e := range os.Environ() {
-		if key, val, found := strings.Cut(e, "="); found {
-			env[key] = val
-		}
-	}
-	return &runtime.EnvSource{Env: env}
+	return s.engine.NewEnvSource()
 }
 
 func (s *Server) makeMockHandler(mapping *RouteMapping) http.HandlerFunc {
@@ -456,7 +510,36 @@ func (s *Server) selectAndGenerateResponse(r *http.Request, mapping *RouteMappin
 		return nil, nil, "", "", genErr
 	}
 
+	// Fire x-event-trigger events after the response is produced (RS.EVT.1-4).
+	if example != nil {
+		s.fireExampleTriggers(example, mapping.Prefix)
+	}
+
 	return body, headers, statusCode, mediaType, nil
+}
+
+// fireExampleTriggers dispatches the x-event-trigger events declared on an
+// OpenAPI response example against the schema's event broker (design D8).
+func (s *Server) fireExampleTriggers(example *openapi3.Example, prefix string) {
+	if s.eventBus == nil || example == nil {
+		return
+	}
+	triggers, ok := extensions.ExtractEventTriggers(example)
+	if !ok {
+		return
+	}
+	for _, trigger := range triggers {
+		delay := triggerDelay(trigger.Delay)
+		s.eventBus.fire(trigger.Name, trigger.Payload, prefix, trigger.Global, delay)
+	}
+}
+
+// triggerDelay maps a trigger delay (ms) to a schedule.
+func triggerDelay(ms int) *delaySchedule {
+	if ms <= 0 {
+		return nil
+	}
+	return &delaySchedule{ms: ms}
 }
 
 func (s *Server) newRpcRequestSource(r *http.Request, pathParams map[string]string, callBody any) *runtime.RequestSource {
@@ -581,25 +664,63 @@ func (s *Server) extractPathParams(r *http.Request, mapping *RouteMapping) map[s
 	return params
 }
 
-// Start starts the HTTP server.
+// Start starts the HTTP server, returning once the server is serving.
 func (s *Server) Start() error {
+	ln, _, err := s.Listen()
+	if err != nil {
+		return err
+	}
+	return s.Serve(ln)
+}
+
+// Listen binds the configured port (config.Port 0 picks an OS-assigned port)
+// and returns the listener along with the actual bound port. The server is
+// not serving until Serve is called. Binding before serving lets the CLI
+// report a truthful "started" log and detect port collisions synchronously.
+func (s *Server) Listen() (net.Listener, int, error) {
 	addr := fmt.Sprintf(":%d", s.config.Port)
-	slog.Info("Starting mock server", "address", addr)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, 0, err
+	}
+	bound := s.config.Port
+	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+		bound = tcpAddr.Port
+	}
 	s.httpMu.Lock()
 	s.httpServer = &http.Server{
 		Addr:    addr,
 		Handler: s.router,
 	}
 	s.httpMu.Unlock()
-	return s.httpServer.ListenAndServe()
+	return ln, bound, nil
+}
+
+// Serve serves requests on an already-bound listener until Shutdown.
+func (s *Server) Serve(ln net.Listener) error {
+	return s.httpServer.Serve(ln)
+}
+
+// BoundPort returns the port the server is listening on (config.Port, or the
+// OS-assigned port when config.Port was 0). It is meaningful after Listen.
+func (s *Server) BoundPort() int {
+	s.httpMu.Lock()
+	defer s.httpMu.Unlock()
+	if s.httpServer != nil && s.httpServer.Addr != "" {
+		if _, portStr, err := net.SplitHostPort(s.httpServer.Addr); err == nil {
+			if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+				return p
+			}
+		}
+	}
+	return s.config.Port
 }
 
 // Shutdown gracefully shuts down the server. It is idempotent: subsequent
 // calls are no-ops that return the result of the first shutdown.
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.sweepCancel != nil {
-		s.sweepCancel()
-	}
+	s.registry.stopSweep()
+	s.shutdownSchedules()
 	s.httpMu.Lock()
 	hs := s.httpServer
 	s.httpMu.Unlock()

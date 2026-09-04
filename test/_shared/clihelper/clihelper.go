@@ -2,10 +2,16 @@ package clihelper
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -113,15 +119,10 @@ func (b *ServerBuilder) SetEnv(env []string) *ServerBuilder {
 }
 
 // Run starts the configured oasmock server and returns the command,
-// error channel, and actual port used (useful when port=0).
+// error channel, and actual port used (useful when port=0, where the OS
+// assigns the port and it is read back from the startup log).
 func (b *ServerBuilder) Run() (*exec.Cmd, <-chan error, int) {
 	binaryPath := getBinaryPath(b.t)
-
-	// Determine actual port
-	actualPort := b.port
-	if actualPort <= 0 {
-		actualPort = findFreePort(b.t)
-	}
 
 	// Build arguments
 	args := []string{"mock"}
@@ -131,7 +132,15 @@ func (b *ServerBuilder) Run() (*exec.Cmd, <-chan error, int) {
 			args = append(args, "--prefix", b.prefixes[i])
 		}
 	}
-	args = append(args, "--port", fmt.Sprintf("%d", actualPort))
+	// When no port is pinned, let the OS assign one (--port 0) and read the
+	// actual bound port back from the startup log. This removes the race
+	// between picking a "free" port and binding it (findFreePort TOCTOU) that
+	// made parallel subprocess tests collide on the same port.
+	if b.port <= 0 {
+		args = append(args, "--port", "0")
+	} else {
+		args = append(args, "--port", fmt.Sprintf("%d", b.port))
+	}
 	if b.verbose {
 		args = append(args, "--verbose")
 	}
@@ -174,12 +183,16 @@ func (b *ServerBuilder) Run() (*exec.Cmd, <-chan error, int) {
 		close(errCh)
 	}()
 
-	// Read stderr output for debugging
+	// Drain stderr: forward each line to t.Logf and accumulate it so the
+	// bound port can be parsed back.
+	captured := newCapturedOutput()
 	go func() {
 		// Capture t early to avoid race with test completion
 		t := b.t
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
+			line := scanner.Text()
+			captured.append(line + "\n")
 			// Use recover to avoid panic if test has already completed
 			func() {
 				defer func() {
@@ -187,18 +200,75 @@ func (b *ServerBuilder) Run() (*exec.Cmd, <-chan error, int) {
 						// Test likely completed, ignore logging
 					}
 				}()
-				t.Logf("oasmock stderr: %s", scanner.Text())
+				t.Logf("oasmock stderr: %s", line)
 			}()
 		}
 		if err := scanner.Err(); err != nil {
 			func() {
 				defer func() { recover() }()
-				t.Logf("stderr scanner error: %v", err)
+				// A closed pipe during teardown is expected; other scanner
+				// errors are worth surfacing.
+				if !errors.Is(err, os.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, net.ErrClosed) {
+					t.Logf("stderr scanner error: %v", err)
+				}
 			}()
 		}
 	}()
 
+	actualPort := b.port
+	if b.port <= 0 {
+		actualPort = waitForBoundPort(b.t, captured, errCh, 5*time.Second)
+	}
+
 	return cmd, errCh, actualPort
+}
+
+// boundPortPattern matches the mock command's startup log line
+// (`msg="Mock server started" port=N`), which is emitted only after the
+// listener has bound successfully.
+var boundPortPattern = regexp.MustCompile(`msg="Mock server started"[^\n]*port=(\d+)`)
+
+// waitForBoundPort blocks until the server's startup log reports the bound
+// port, or the process exits / a timeout elapses.
+func waitForBoundPort(t *testing.T, captured *capturedOutput, errCh <-chan error, timeout time.Duration) int {
+	t.Helper()
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if m := boundPortPattern.FindStringSubmatch(captured.string()); m != nil {
+				if p, err := strconv.Atoi(m[1]); err == nil && p > 0 {
+					return p
+				}
+			}
+		case err := <-errCh:
+			t.Fatalf("oasmock exited before reporting its bound port (err=%v); log:\n%s", err, captured.string())
+		case <-deadline:
+			t.Fatalf("timed out waiting for oasmock to report its bound port; log:\n%s", captured.string())
+		}
+	}
+}
+
+// capturedOutput accumulates subprocess stderr under a mutex.
+type capturedOutput struct {
+	mu sync.Mutex
+	sb strings.Builder
+}
+
+func newCapturedOutput() *capturedOutput { return &capturedOutput{} }
+
+func (c *capturedOutput) append(s string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sb.WriteString(s)
+}
+
+func (c *capturedOutput) string() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sb.String()
 }
 
 // StartServer starts the oasmock CLI server as a subprocess.

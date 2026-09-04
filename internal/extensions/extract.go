@@ -38,7 +38,7 @@ func ExtractParamsMatch(ex *openapi3.Example) (ParamsMatch, bool) {
 	var key string
 	switch {
 	case hasParamsMatch && hasMatch:
-		slog.Warn("Example has both x-mock-match and x-mock-params-match. Using x-mock-match (deprecated).")
+		slog.Warn("Example has both x-mock-match and x-mock-params-match. Ignoring deprecated x-mock-params-match; using x-mock-match.")
 		key = "x-mock-match"
 	case hasParamsMatch:
 		key = "x-mock-params-match"
@@ -72,4 +72,70 @@ func ExtractSetState(ex *openapi3.Example) (map[string]any, bool) {
 // ExtractHeaders extracts x-mock-headers extension.
 func ExtractHeaders(ex *openapi3.Example) (map[string]any, bool) {
 	return extractExtension[map[string]any](ex, "x-mock-headers")
+}
+
+// EventTrigger is a single x-event-trigger entry (design D8).
+type EventTrigger struct {
+	// Name is the named event fired when the example is selected.
+	Name string
+	// Payload is the event payload exposed via {$event.*}.
+	Payload map[string]any
+	// Delay is the delivery delay in milliseconds.
+	Delay int
+	// Global makes the event server-wide instead of schema-local.
+	Global bool
+}
+
+// ExtractEventTriggers parses the x-event-trigger list extension (RS.EVT.1-4).
+// It returns false when the extension is absent or not a list.
+func ExtractEventTriggers(ex *openapi3.Example) ([]EventTrigger, bool) {
+	if ex == nil || ex.Extensions == nil {
+		return nil, false
+	}
+	raw, ok := ex.Extensions["x-event-trigger"]
+	if !ok {
+		return nil, false
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, false
+	}
+	var out []EventTrigger
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		t := EventTrigger{}
+		if name, ok := m["name"].(string); ok {
+			t.Name = name
+		}
+		if payload, ok := m["payload"].(map[string]any); ok {
+			t.Payload = payload
+		}
+		if delay, ok := asDelay(m["delay"]); ok {
+			t.Delay = delay
+		}
+		if global, ok := m["global"].(bool); ok {
+			t.Global = global
+		}
+		if t.Name == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out, len(out) > 0
+}
+
+// asDelay converts a JSON number to an int millisecond delay.
+func asDelay(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	}
+	return 0, false
 }
