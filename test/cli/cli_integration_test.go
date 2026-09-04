@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -362,6 +364,43 @@ func TestCLICustomPort(t *testing.T) {
 	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started", fmt.Sprintf("port=%d", port))
 	assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
 	assert.Contains(t, output, fmt.Sprintf("port=%d", port), "custom port not used: %s", output)
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+}
+
+/*
+Scenario: Binding an ephemeral port
+Given the oasmock binary and a test schema
+When invoked with --port 0
+Then the server binds an OS-assigned port and logs the actual bound port
+
+Related spec scenarios: RS.CLI.32
+*/
+func TestCLIEphemeralPort(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	cmd := exec.Command(binaryPath(t), "mock", "--from", "../../test/_shared/resources/test.yaml", "--port", "0")
+	stderrPipe, err := cmd.StderrPipe()
+	require.NoError(t, err, "failed to get stderr pipe")
+	require.NoError(t, cmd.Start(), "failed to start mock command")
+
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started")
+	assert.Contains(t, output, "Mock server started", "ephemeral-port server did not start: %s", output)
+
+	m := regexp.MustCompile(`port=(\d+)`).FindStringSubmatch(output)
+	require.NotEmpty(t, m, "actual bound port not logged: %s", output)
+	port, err := strconv.Atoi(m[1])
+	require.NoError(t, err, "failed to parse bound port")
+	require.NotZero(t, port, "bound port should be OS-assigned (non-zero)")
+
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/users", port))
+	require.NoError(t, err, "failed to reach server on bound port %d", port)
+	defer resp.Body.Close() //nolint:errcheck
+	assert.Equal(t, 200, resp.StatusCode, "expected 200 from /users on bound port %d", port)
+
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }

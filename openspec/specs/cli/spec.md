@@ -61,6 +61,10 @@ The mock command SHALL start a mock server based on OpenAPI and/or AsyncAPI sche
   ```
 - **THEN** the CLI loads both, auto-detecting each specification type
 
+#### Scenario RS.CLI.32: Binding an ephemeral port
+- **WHEN** user runs `oasmock --port 0`
+- **THEN** the server binds an OS-assigned port and logs the actual bound port under `port=`
+
 ### Requirement: Environment variable overrides
 The CLI SHALL support configuration sources with the following precedence: command-line arguments > environment variables > configuration file > defaults. Environment variables SHALL override configuration file values but be overridden by command-line arguments.
 

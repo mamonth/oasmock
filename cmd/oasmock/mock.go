@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -53,6 +54,15 @@ func portError(format string, args ...any) error {
 		code:    4,
 		message: fmt.Sprintf(format, args...),
 	}
+}
+
+// validatePort validates the --port flag value. Port 0 selects an OS-assigned
+// (ephemeral) port and is always valid (RS.CLI.32).
+func validatePort(port int) error {
+	if port != 0 && (port < minPort || port > maxPort) {
+		return validationError("port must be between 1 and 65535")
+	}
+	return nil
 }
 
 func parseSchemaConfig(cmd *cobra.Command) error {
@@ -182,8 +192,9 @@ func runMock(cmd *cobra.Command, args []string) error {
 	if len(config.sources) != len(config.prefixes) && len(config.prefixes) != 0 {
 		return validationError("number of --prefix flags must match number of --from flags, or no --prefix flags provided")
 	}
-	if port <= 0 || port > maxPort {
-		return validationError("port must be between 1 and 65535")
+	// port 0 selects an OS-assigned (ephemeral) port (RS.CLI.32).
+	if err := validatePort(port); err != nil {
+		return err
 	}
 	if delay < 0 {
 		return validationError("delay cannot be negative")
@@ -214,17 +225,29 @@ func runMock(cmd *cobra.Command, args []string) error {
 		return schemaError("failed to create server: %v", err)
 	}
 
-	// Start server in a goroutine so we can handle signals
+	// Bind the port up front so the "started" log is only emitted after a
+	// successful bind and carries the actual bound port (--port 0 selects an
+	// OS-assigned port, RS.CLI.11/RS.CLI.32). A collision is reported
+	// synchronously with exit code 4 (RS.CLI.17).
+	ln, boundPort, err := srv.Listen()
+	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return portError("port %d is already in use", port)
+		}
+		return portError("failed to listen on port %d: %v", port, err)
+	}
+
+	// Serve in a goroutine so we can handle signals
 	serverErrChan := make(chan error, 1)
 	go func() {
-		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			slog.Error("Server error", "err", err)
 			serverErrChan <- err
 		}
 	}()
 
 	// Wait for interrupt signal
-	slog.Info("Mock server started", "port", port)
+	slog.Info("Mock server started", "port", boundPort)
 	slog.Info("Press Ctrl+C to stop")
 
 	// Set up signal handling for graceful shutdown

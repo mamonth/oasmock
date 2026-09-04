@@ -664,17 +664,56 @@ func (s *Server) extractPathParams(r *http.Request, mapping *RouteMapping) map[s
 	return params
 }
 
-// Start starts the HTTP server.
+// Start starts the HTTP server, returning once the server is serving.
 func (s *Server) Start() error {
+	ln, _, err := s.Listen()
+	if err != nil {
+		return err
+	}
+	return s.Serve(ln)
+}
+
+// Listen binds the configured port (config.Port 0 picks an OS-assigned port)
+// and returns the listener along with the actual bound port. The server is
+// not serving until Serve is called. Binding before serving lets the CLI
+// report a truthful "started" log and detect port collisions synchronously.
+func (s *Server) Listen() (net.Listener, int, error) {
 	addr := fmt.Sprintf(":%d", s.config.Port)
-	slog.Info("Starting mock server", "address", addr)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, 0, err
+	}
+	bound := s.config.Port
+	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+		bound = tcpAddr.Port
+	}
 	s.httpMu.Lock()
 	s.httpServer = &http.Server{
 		Addr:    addr,
 		Handler: s.router,
 	}
 	s.httpMu.Unlock()
-	return s.httpServer.ListenAndServe()
+	return ln, bound, nil
+}
+
+// Serve serves requests on an already-bound listener until Shutdown.
+func (s *Server) Serve(ln net.Listener) error {
+	return s.httpServer.Serve(ln)
+}
+
+// BoundPort returns the port the server is listening on (config.Port, or the
+// OS-assigned port when config.Port was 0). It is meaningful after Listen.
+func (s *Server) BoundPort() int {
+	s.httpMu.Lock()
+	defer s.httpMu.Unlock()
+	if s.httpServer != nil && s.httpServer.Addr != "" {
+		if _, portStr, err := net.SplitHostPort(s.httpServer.Addr); err == nil {
+			if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+				return p
+			}
+		}
+	}
+	return s.config.Port
 }
 
 // Shutdown gracefully shuts down the server. It is idempotent: subsequent

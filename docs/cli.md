@@ -16,7 +16,7 @@ oasmock [options]
 |--------------------|-----------|--------------------|--------------------------------------------------------------------------|
 | `--from`           | string    | `src/openapi.yaml` | Source OpenAPI or AsyncAPI schema (autodetected by root key). Can be specified multiple times.                  |
 | `--prefix`         | string    | `''`               | URI prefix for the schema. Can be specified for each `--from` parameter. |
-| `--port`           | number    | `19191`            | Port to listen on.                                                       |
+| `--port`           | number    | `19191`            | Port to listen on. Use `0` to bind an OS-assigned (ephemeral) port; the actual bound port is logged under `port=` after startup. |
 | `--delay`          | number    | `100`              | Delay between request and response in milliseconds.                      |
 | `--verbose`        | boolean   | `false`            | Enable verbose logging.                                                  |
 | `--nocors`         | boolean   | `false`            | Disable automatic CORS compliance.                                       |
