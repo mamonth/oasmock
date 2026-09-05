@@ -106,11 +106,13 @@ func TestRenderMessageSpecs_Delete(t *testing.T) {
 
 /*
 Scenario: Cron subscriptions map to the periodic x-mock-interval shim
-Given a message example subscribing to the cron built-in with a wait
+Given a message example subscribing to the cron built-in with a wait and a
+state-backed sequence counter
 When derivedExamples maps its x-send-events entry
-Then the example becomes a periodically driven example with the wait interval
+Then the example becomes a periodically driven example with the wait interval,
+keeping the pace-by-state-and-cron behavior of the templating spec
 
-Related spec scenarios: RS.EVT.18, RS.EXT.22
+Related spec scenarios: RS.ATM.18, RS.EVT.18, RS.EXT.22
 */
 func TestDerivedExamples_CronToPeriodic(t *testing.T) {
 	t.Parallel()

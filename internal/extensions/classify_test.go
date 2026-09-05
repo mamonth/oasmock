@@ -158,7 +158,7 @@ When ClassifyTrigger is called
 Then it returns a clear load error instead of registering a subscription keyed
 by the literal expression string (which could never match a fired identity)
 
-Related spec scenarios: RS.EXT.20
+Related spec scenarios: RS.EXT.33
 */
 func TestClassifyTrigger_NonLiteralIdentityRejected(t *testing.T) {
 	t.Parallel()
@@ -182,7 +182,7 @@ When ClassifyTrigger is called
 Then the example is event-driven with an empty (wildcard) identity that
 evaluates against every fired event
 
-Related spec scenarios: RS.EXT.20, RS.EXT.24
+Related spec scenarios: RS.EXT.34
 */
 func TestClassifyTrigger_EventWithoutIdentityIsWildcard(t *testing.T) {
 	t.Parallel()
@@ -206,7 +206,7 @@ value
 When ClassifyTrigger is called
 Then it returns a clear load error instead of silently truncating to an integer
 
-Related spec scenarios: RS.EXT.22
+Related spec scenarios: RS.EXT.35
 */
 func TestClassifyTrigger_FractionalIntervalRejected(t *testing.T) {
 	t.Parallel()
@@ -227,7 +227,7 @@ value
 When ClassifyTrigger is called
 Then it returns a clear load error instead of silently ignoring the delay
 
-Related spec scenarios: RS.EXT.23
+Related spec scenarios: RS.EXT.36
 */
 func TestClassifyTrigger_FractionalDelayRejected(t *testing.T) {
 	t.Parallel()

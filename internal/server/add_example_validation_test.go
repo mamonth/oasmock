@@ -103,7 +103,7 @@ not reference the event context
 When /_mock/examples is invoked
 Then the server responds with HTTP 400 and registers nothing
 
-Related spec scenarios: RS.MAPI.29, RS.EXT.28
+Related spec scenarios: RS.MAPI.34
 */
 func TestAddExampleValidation_NonEventMatchRejected(t *testing.T) {
 	t.Parallel()
@@ -147,7 +147,7 @@ Given a POST with an async target and a literal-only match
 When /_mock/examples is invoked
 Then the server responds with HTTP 400 and registers nothing
 
-Related spec scenarios: RS.MAPI.29
+Related spec scenarios: RS.MAPI.34
 */
 func TestAddExampleValidation_LiteralOnlyMatchRejected(t *testing.T) {
 	t.Parallel()

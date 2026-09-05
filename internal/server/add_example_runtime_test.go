@@ -168,7 +168,7 @@ When /_mock/examples is invoked
 Then the sync example id carries the "dynex-" prefix and the async runtime
 example id carries the "rtex-" prefix, keeping the two registries disjoint
 
-Related spec scenarios: RS.MAPI.30-31
+Related spec scenarios: RS.MAPI.30, RS.MAPI.31
 */
 func TestAddExample_IdsAreNamespaced(t *testing.T) {
 	t.Parallel()

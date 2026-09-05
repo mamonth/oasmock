@@ -233,7 +233,7 @@ Given a nil eventBus
 When registerRuntimeExample is called
 Then it returns an error instead of a silent empty success
 
-Related spec scenarios: RS.MAPI.24-26
+Related spec scenarios: RS.MAPI.24, RS.MAPI.25, RS.MAPI.26
 */
 func TestEventBus_RegisterRuntimeExampleNilBusErrors(t *testing.T) {
 	t.Parallel()
@@ -330,7 +330,7 @@ Given a periodic message example declaring x-mock-skip
 When the server runs the interval job with a connected consumer
 Then no message is delivered to the channel
 
-Related spec scenarios: RS.EXT.22
+Related spec scenarios: RS.EXT.37
 */
 func TestEventDelivery_PeriodicSkipsSkippedExample(t *testing.T) {
 	t.Parallel()

@@ -122,7 +122,8 @@ class ScenarioCoverageAnalyzer:
                     else:
                         # Scenario mentioned in test but not found in any spec
                         print(
-                            f"Warning: Scenario {scenario} in {test_rel_path} not found in baseline or active change specs"
+                            f"Warning: Scenario {scenario} in {test_rel_path} not found in baseline or active change specs",
+                            file=sys.stderr,
                         )
                         self.scenario_to_tests[scenario] = {
                             "unit": [],
