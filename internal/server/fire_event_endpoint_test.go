@@ -47,7 +47,7 @@ Given a management request firing a named event with a payload
 When the fire-event endpoint is invoked with a connected consumer
 Then the consumer receives the templated message
 
-Related spec scenarios: RS.EVT.16, RS.EVT.17, RS.AMG.20, RS.AMG.21, RS.MAPI.22, RS.MAPI.23
+Related spec scenarios: RS.EVT.16, RS.EVT.17, RS.AMG.20, RS.AMG.21, RS.MAPI.22
 */
 func TestFireEventEndpoint(t *testing.T) {
 	t.Parallel()
@@ -65,8 +65,8 @@ func TestFireEventEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close() //nolint:errcheck
 
-	body := `{"event":"levelUp","payload":{"level":"warn","message":"high load"}}`
-	resp, err := http.Post(ts.URL+"/_mock/events/fire", "application/json", strings.NewReader(body))
+	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn","message":"high load"}}`
+	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -99,8 +99,8 @@ func TestFireEventEndpoint_Delayed(t *testing.T) {
 
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
-	body := `{"event":"levelUp","payload":{"level":"warn"},"delay":10}`
-	resp, err := http.Post(ts.URL+"/_mock/events/fire", "application/json", strings.NewReader(body))
+	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn"},"delay":10}`
+	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -125,8 +125,8 @@ func TestFireEventEndpoint_NegativeDelay(t *testing.T) {
 
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
-	body := `{"event":"levelUp","payload":{},"delay":-5}`
-	resp, err := http.Post(ts.URL+"/_mock/events/fire", "application/json", strings.NewReader(body))
+	body := `{"type":"fire","event":"levelUp","payload":{},"delay":-5}`
+	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -151,8 +151,8 @@ func TestFireEventEndpoint_NoConsumers(t *testing.T) {
 
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
-	body := `{"event":"levelUp","payload":{"level":"warn","message":"high load"}}`
-	resp, err := http.Post(ts.URL+"/_mock/events/fire", "application/json", strings.NewReader(body))
+	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn","message":"high load"}}`
+	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)

@@ -1,0 +1,185 @@
+asyncapi: 3.0.0
+info:
+  title: OASMock control AsyncAPI
+  description: |
+    Asynchronous surface of the OASMock control plane. The management WebSocket
+    stream (GET /_mock/stream) is the general cross-cutting control channel for
+    mock-runner test harnesses: it pushes runtime notifications (fired events,
+    message pushes, consumer lifecycle and schedule start/stop) as JSON
+    envelopes. V1 is notifications-only — filters are set at connect time via
+    the events and channels query parameters and the server pushes envelopes;
+    the client does not send commands on this channel.
+  version: 0.1.0
+defaultContentType: application/json
+channels:
+  stream:
+    address: /_mock/stream
+    title: Management notification stream
+    description: |
+      A single consumer connects at upgrade time (WebSocket). The server pushes
+      zero or more JSON envelopes; each envelope's type discriminates its
+      payload. An omitted filter parameter matches everything; '*' is a glob.
+    parameters:
+      events:
+        description: Comma-separated event-name globs to subscribe to (omit for all)
+      channels:
+        description: Comma-separated channel-address globs to subscribe to (omit for all)
+    bindings:
+      ws:
+        method: GET
+    messages:
+      EventNotification:
+        $ref: '#/components/messages/EventNotification'
+      PushNotification:
+        $ref: '#/components/messages/PushNotification'
+      ConsumerNotification:
+        $ref: '#/components/messages/ConsumerNotification'
+      ScheduleNotification:
+        $ref: '#/components/messages/ScheduleNotification'
+operations:
+  receiveNotifications:
+    action: receive
+    channel:
+      $ref: '#/channels/stream'
+    messages:
+      - $ref: '#/channels/stream/messages/EventNotification'
+      - $ref: '#/channels/stream/messages/PushNotification'
+      - $ref: '#/channels/stream/messages/ConsumerNotification'
+      - $ref: '#/channels/stream/messages/ScheduleNotification'
+components:
+  messages:
+    EventNotification:
+      name: event
+      summary: Event notification — fired when a named event fires (spec-triggered or via POST /_mock/events)
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/EventEnvelope'
+    PushNotification:
+      name: push
+      summary: Push notification — fired when a management push delivers a message to a channel
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/PushEnvelope'
+    ConsumerNotification:
+      name: consumer
+      summary: Consumer lifecycle notification — fired when a consumer connects to or disconnects from a channel
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ConsumerEnvelope'
+    ScheduleNotification:
+      name: schedule
+      summary: Schedule notification — fired when a periodic message example starts or stops
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ScheduleEnvelope'
+  schemas:
+    EventEnvelope:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          const: event
+        ts:
+          type: integer
+          format: int64
+        event:
+          $ref: '#/components/schemas/EventEnvelopeBody'
+    EventEnvelopeBody:
+      type: object
+      properties:
+        name:
+          type: string
+          description: The named event (or built-in kind) that fired
+        schema:
+          type: string
+          description: Schema scope of the fire (empty for global)
+        global:
+          type: boolean
+          default: false
+        payload:
+          type: object
+          additionalProperties: true
+          description: Event payload exposed to templates via {$event.*}
+    PushEnvelope:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          const: push
+        ts:
+          type: integer
+          format: int64
+        push:
+          $ref: '#/components/schemas/PushEnvelopeBody'
+    PushEnvelopeBody:
+      type: object
+      properties:
+        channel:
+          type: string
+          description: Channel address the message was pushed to
+        connectionId:
+          type: string
+          description: Target connection when the push was targeted
+        payload:
+          type: object
+          additionalProperties: true
+          description: The delivered message payload
+    ConsumerEnvelope:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          const: consumer
+        ts:
+          type: integer
+          format: int64
+        consumer:
+          $ref: '#/components/schemas/ConsumerEnvelopeBody'
+    ConsumerEnvelopeBody:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [connected, disconnected]
+        connectionId:
+          type: string
+        channel:
+          type: string
+        streams:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+          description: Open SignalR streams for the connection
+    ScheduleEnvelope:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          const: schedule
+        ts:
+          type: integer
+          format: int64
+        schedule:
+          $ref: '#/components/schemas/ScheduleEnvelopeBody'
+    ScheduleEnvelopeBody:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [started, stopped]
+        exampleId:
+          type: string
+        channel:
+          type: string
+        interval:
+          type: integer
+          description: Delivery interval in milliseconds

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/mamonth/oasmock/internal/runtime"
@@ -47,6 +49,21 @@ func getCachedSchema(schema map[string]any) (*gojsonschema.Schema, error) {
 // EvaluateParamsMatch evaluates whether the given params match the conditions.
 func EvaluateParamsMatch(pm ParamsMatch, eval runtime.Evaluator) (bool, error) {
 	for expr, condition := range pm {
+		// Pre-evaluate the condition value when it is itself a runtime
+		// expression AND the key references the new event/connection contexts
+		// (design D6): a condition like
+		// '{$connection.id}': '{$event.connectionId}' compares resolved values.
+		// Reply-path conditions keep literal value semantics so sync matching
+		// is unchanged.
+		if str, ok := condition.(string); ok && isFullExpression(str) && referencesNewMatchContext(expr) {
+			resolved, err := eval.Evaluate(str)
+			if err != nil {
+				slog.Debug("EvaluateParamsMatch: condition expression evaluation failed", "expr", expr, "condition", str, "err", err)
+				return false, nil
+			}
+			condition = resolved
+		}
+
 		// Evaluate the runtime expression
 		value, err := eval.Evaluate(expr)
 		if err != nil {
@@ -75,6 +92,137 @@ func EvaluateParamsMatch(pm ParamsMatch, eval runtime.Evaluator) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// referencesNewMatchContext reports whether a condition key references the
+// event or connection context, the two contexts added by this change. Only
+// those conditions pre-resolve full-expression values (design D6); reply-path
+// conditions keep literal value semantics.
+func referencesNewMatchContext(expr string) bool {
+	return eventRefPattern.MatchString(expr) || connectionRefPattern.MatchString(expr)
+}
+
+// ReferencesEvent reports whether a condition key or value references the
+// event context ({$event.*}).
+func ReferencesEvent(expr string, condition any) bool {
+	return referencesContext(expr, condition, eventRefPattern)
+}
+
+// ReferencesNonEventContext reports whether a condition key or value references
+// a reply-path context ({$request.*}, {$message.*}, {$channel.*}).
+func ReferencesNonEventContext(expr string, condition any) bool {
+	return referencesContext(expr, condition, nonEventContextPattern)
+}
+
+// referencesConnection reports whether a condition key or value references the
+// connection context ({$connection.*}).
+func referencesConnection(expr string, condition any) bool {
+	return referencesContext(expr, condition, connectionRefPattern)
+}
+
+// referencesContext reports whether a condition key or its string value matches
+// any of the given context-reference patterns.
+func referencesContext(expr string, condition any, patterns ...*regexp.Regexp) bool {
+	s, _ := condition.(string)
+	for _, p := range patterns {
+		if p.MatchString(expr) || p.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// isFullExpression reports whether a string is a single complete runtime
+// expression (e.g. "{$event.connectionId}").
+func isFullExpression(s string) bool {
+	return strings.HasPrefix(s, "{$") && strings.HasSuffix(s, "}") && strings.Count(s, "{$") == 1
+}
+
+// connectionRefPattern matches a {$connection.*} reference anywhere in a
+// condition key or value string.
+var connectionRefPattern = regexp.MustCompile(`\{\$connection\.`)
+
+// eventRefPattern matches a {$event.*} reference.
+var eventRefPattern = regexp.MustCompile(`\{\$event\.`)
+
+// nonEventContextPattern matches the HTTP/message/channel reply contexts
+// ({$request.*}, {$message.*}, {$channel.*}).
+var nonEventContextPattern = regexp.MustCompile(`\{\$(request|message|channel)\.`)
+
+// MatchReferencesEvent reports whether any condition in a match references the
+// event context. A match with no and no event reference is a plain reply match.
+func MatchReferencesEvent(match map[string]any) bool {
+	for expr, condition := range match {
+		if ReferencesEvent(expr, condition) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchMixedContext reports whether a match mixes event conditions with
+// reply-path ({$request.*}/{$message.*}/{$channel.*}) conditions, which is
+// rejected at load (RS.EXT.20).
+func MatchMixedContext(match map[string]any) bool {
+	hasEvent := false
+	hasNonEvent := false
+	for expr, condition := range match {
+		if ReferencesEvent(expr, condition) {
+			hasEvent = true
+		}
+		if ReferencesNonEventContext(expr, condition) {
+			hasNonEvent = true
+		}
+	}
+	return hasEvent && hasNonEvent
+}
+
+// EventIdentity extracts the identity condition from a match: the literal value
+// of a "{$event.name}" condition. It returns ("", false) when the match does
+// not pin an identity.
+func EventIdentity(match map[string]any) (string, bool) {
+	for expr, condition := range match {
+		if !eventRefPattern.MatchString(expr) {
+			continue
+		}
+		if expr != "{$event.name}" {
+			continue
+		}
+		if s, ok := condition.(string); ok && s != "" {
+			return s, true
+		}
+	}
+	return "", false
+}
+
+// PartitionConnectionConditions splits an x-mock-match into the conditions
+// that reference {$connection.*} (the per-connection recipient filter) and the
+// conditions that do not (evaluated once per emission). An empty connection
+// bucket means delivery broadcasts to all consumers of the channel (design D6,
+// RS.EXT.24-25).
+func PartitionConnectionConditions(pm ParamsMatch) (common, connection ParamsMatch) {
+	common = make(ParamsMatch)
+	connection = make(ParamsMatch)
+	for expr, condition := range pm {
+		if referencesConnection(expr, condition) {
+			connection[expr] = condition
+		} else {
+			common[expr] = condition
+		}
+	}
+	return common, connection
+}
+
+// MatchReferencesConnection reports whether any condition in a match references
+// the connection context (so the example needs a per-connection recipient
+// decision at delivery).
+func MatchReferencesConnection(match map[string]any) bool {
+	for expr, condition := range match {
+		if referencesConnection(expr, condition) {
+			return true
+		}
+	}
+	return false
 }
 
 // equalJSON compares two JSON values for equality.

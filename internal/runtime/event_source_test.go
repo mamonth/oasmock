@@ -53,3 +53,65 @@ func TestEvaluator_EventExpression(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "info", val)
 }
+
+/*
+Scenario: Event identity is exposed via the reserved name accessor
+Given an EventSource carrying an event name and a payload
+When the name accessor is queried
+Then {$event.name} resolves to the event identity (registered name or built-in kind)
+
+Related spec scenarios: RS.EXT.18
+*/
+func TestEventSource_GetName(t *testing.T) {
+	t.Parallel()
+
+	src := &EventSource{Name: "orderCreated", Data: map[string]any{"accountId": "acc-1"}}
+
+	v, ok := src.Get("name")
+	require.True(t, ok)
+	assert.Equal(t, "orderCreated", v)
+}
+
+/*
+Scenario: Whole-payload access via the reserved data accessor
+Given an EventSource carrying a payload
+When the data accessor is queried
+Then {$event.data} resolves to the whole payload object
+
+Related spec scenarios: RS.EXT.19
+*/
+func TestEventSource_GetData(t *testing.T) {
+	t.Parallel()
+
+	payload := map[string]any{"accountId": "acc-1", "amount": 10}
+	src := &EventSource{Name: "orderCreated", Data: payload}
+
+	v, ok := src.Get("data")
+	require.True(t, ok)
+	assert.Equal(t, payload, v)
+}
+
+/*
+Scenario: Payload field access is unchanged alongside reserved accessors
+Given an EventSource with payload fields named and data
+When the payload field accessors are queried
+Then field names shadowed by reserved accessors are reachable only via data
+
+Related spec scenarios: RS.EXT.18, RS.EXT.19
+*/
+func TestEventSource_ReservedFieldsShadowed(t *testing.T) {
+	t.Parallel()
+
+	src := &EventSource{Name: "orderCreated", Data: map[string]any{
+		"name": "shadowed",
+		"data": "shadowed",
+	}}
+
+	name, ok := src.Get("name")
+	require.True(t, ok)
+	assert.Equal(t, "orderCreated", name)
+
+	data, ok := src.Get("data")
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"name": "shadowed", "data": "shadowed"}, data)
+}

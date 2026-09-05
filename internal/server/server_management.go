@@ -12,8 +12,29 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mamonth/oasmock/internal/extensions"
+	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/xeipuuv/gojsonschema"
 )
+
+// matchesEventContext reports whether a match references the event context
+// ({$event.*}), which makes it an event-driven runtime trigger.
+func matchesEventContext(match map[string]any) bool {
+	return extensions.MatchReferencesEvent(match)
+}
+
+// triggerKindString maps an extensions.TriggerKind to the wire value used in
+// the POST /_mock/examples response "kind" field (OpenAPI enum: event|interval).
+func triggerKindString(kind extensions.TriggerKind) string {
+	switch kind {
+	case extensions.TriggerEvent:
+		return "event"
+	case extensions.TriggerPeriodic:
+		return "interval"
+	default:
+		return ""
+	}
+}
 
 // findAsyncRouteMapping resolves an AsyncAPI route mapping by protocol and
 // channel address (RS.MAPI.19, RS.MAPI.21).
@@ -37,9 +58,35 @@ func (s *Server) findAsyncRouteMapping(protocol, channel, method string) *RouteM
 	return nil
 }
 
+// addExampleRequestSchema is the oneOf two-branch request schema for
+// POST /_mock/examples (design D2). Branch A is the sync (OpenAPI) target:
+// required path+response and no async-only fields. Branch B is the async
+// (AsyncAPI) target: required channel+response and no path.
 var addExampleRequestSchema = gojsonschema.NewGoLoader(map[string]any{
 	"type":     "object",
 	"required": []string{"response"},
+	"oneOf": []any{
+		map[string]any{
+			"required": []string{"path", "response"},
+			"not": map[string]any{
+				"anyOf": []any{
+					map[string]any{"required": []string{"protocol"}},
+					map[string]any{"required": []string{"channel"}},
+					map[string]any{"required": []string{"match"}},
+					map[string]any{"required": []string{"interval"}},
+					map[string]any{"required": []string{"delay"}},
+				},
+			},
+		},
+		map[string]any{
+			"required": []string{"channel", "response"},
+			"not": map[string]any{
+				"anyOf": []any{
+					map[string]any{"required": []string{"path"}},
+				},
+			},
+		},
+	},
 	"properties": map[string]any{
 		"path": map[string]any{"type": "string"},
 		"protocol": map[string]any{
@@ -48,9 +95,16 @@ var addExampleRequestSchema = gojsonschema.NewGoLoader(map[string]any{
 		},
 		"channel": map[string]any{"type": "string"},
 		"method": map[string]any{
-			"type": "string",
-			"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+			"type":    "string",
+			"enum":    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+			"default": "GET",
 		},
+		"match": map[string]any{
+			"type":                 "object",
+			"additionalProperties": true,
+		},
+		"interval": map[string]any{"type": "integer", "minimum": 1},
+		"delay":    map[string]any{"type": "integer", "minimum": 0},
 		"once":     map[string]any{"type": "boolean"},
 		"validate": map[string]any{"type": "boolean"},
 		"ttl":      map[string]any{"type": "integer", "minimum": 0},
@@ -202,6 +256,14 @@ func (s *Server) handleGetRequests(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// newExampleID returns a time-unique example id in the given namespace. The
+// namespace prefix keeps runtime-async ids ("rtex-") disjoint from sync
+// dynamic-example ids ("dynex-"), so DELETE /_mock/examples/{id} never has to
+// disambiguate a collision between the two registries.
+func newExampleID(namespace string) string {
+	return fmt.Sprintf("%s-%d", namespace, time.Now().UnixNano())
+}
+
 func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 	// Read the raw body for validation
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -209,12 +271,12 @@ func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 		if s.config.Verbose {
 			slog.Debug("Failed to read request body", "err", err)
 		}
-		http.Error(w, `{"error":"Failed to read request body"}`, http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 	// Validate against OpenAPI schema
 	if err := validateAddExampleRequest(bodyBytes); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// Decode into struct
@@ -223,6 +285,9 @@ func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 		Method     string         `json:"method"`
 		Protocol   string         `json:"protocol"`
 		Channel    string         `json:"channel"`
+		Match      map[string]any `json:"match"`
+		Interval   int            `json:"interval"`
+		Delay      int            `json:"delay"`
 		Once       bool           `json:"once"`
 		Validate   bool           `json:"validate"`
 		TTL        int            `json:"ttl"`
@@ -238,17 +303,24 @@ func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Response.Code == 0 || (req.Path == "" && req.Channel == "") {
-		http.Error(w, `{"error":"Missing required fields"}`, http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "missing required fields")
 		return
 	}
 	req.Method = cmp.Or(req.Method, DefaultMethod)
+
+	// Single-trigger rule (RS.MAPI.29): an async target has exactly one
+	// trigger — interval OR an {$event.*}-based match, never both.
+	if matchesEventContext(req.Match) && req.Interval > 0 {
+		writeJSONError(w, http.StatusBadRequest, "'interval' and an event-based 'match' are mutually exclusive")
+		return
+	}
 
 	// Resolve the target route: OpenAPI path/method or AsyncAPI channel.
 	var targetMapping *RouteMapping
 	if req.Protocol != "" || req.Channel != "" {
 		targetMapping = s.findAsyncRouteMapping(req.Protocol, req.Channel, req.Method)
 		if targetMapping == nil {
-			http.Error(w, `{"error":"No matching route found"}`, http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "no matching route found")
 			return
 		}
 	} else {
@@ -260,14 +332,62 @@ func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if targetMapping == nil {
-			http.Error(w, `{"error":"No matching route found"}`, http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "no matching route found")
 			return
 		}
 	}
 	// TODO: validate response body against OpenAPI schema if req.Validate is true
 	// (skipped for now)
+
+	// Runtime async-driven examples (match/interval) register through the
+	// event broker / scheduler (RS.MAPI.24-26, RS.MAPI.33). A runtime match on
+	// an async target must drive emission, so only an {$event.*}-based match is
+	// accepted; a connection-only or literal match has no trigger and is
+	// rejected rather than silently registered nowhere.
+	if targetMapping.Protocol != "" && req.Match != nil && !matchesEventContext(req.Match) {
+		writeJSONError(w, http.StatusBadRequest, "async target 'match' must reference the event context ({$event.*}); use 'interval' for periodic emission")
+		return
+	}
+	if targetMapping.Protocol != "" && (req.Match != nil || req.Interval > 0) {
+		id := newExampleID("rtex")
+		headers := make(map[string]any, len(req.Response.Headers))
+		for k, v := range req.Response.Headers {
+			headers[k] = v
+		}
+		ext := make(map[string]any)
+		if req.Match != nil {
+			ext["x-mock-match"] = req.Match
+		}
+		if req.Interval > 0 {
+			ext["x-mock-interval"] = req.Interval
+		}
+		if req.Delay > 0 {
+			ext["x-mock-delay"] = req.Delay
+		}
+		example := &loader.MessageExampleSpec{
+			Name:       "runtime-" + id,
+			Headers:    headers,
+			Payload:    req.Response.Body,
+			Extensions: ext,
+		}
+		kind, jobID, err := s.registerRuntimeExample(id, targetMapping, example)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"message": "Example added",
+			"id":      id,
+			"kind":    triggerKindString(kind),
+			"jobID":   jobID,
+		})
+		return
+	}
+
 	// Create dynamic example
-	id := fmt.Sprintf("dynex-%d", time.Now().UnixNano())
+	id := newExampleID("dynex")
 	example := dynamicExample{
 		onceID:     id,
 		once:       req.Once,

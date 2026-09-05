@@ -90,9 +90,9 @@ func TestValidateAddExampleRequest(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "missing path",
+			name:    "missing path and channel rejected",
 			json:    `{"response":{"code":200}}`,
-			wantErr: false, // path is optional; channel may be supplied instead
+			wantErr: true, // oneOf requires an OpenAPI path or an AsyncAPI channel target
 		},
 		{
 			name:    "valid async channel request",
@@ -805,7 +805,7 @@ func TestHandleAddExample(t *testing.T) {
 				ChiPattern: "/test",
 			}},
 			wantStatus:  http.StatusBadRequest,
-			wantJSON:    map[string]any{"error": "Missing required fields"},
+			wantJSON:    map[string]any{"error": "invalid request: (root): Must validate one and only one schema (oneOf); (root): path is required"},
 			wantExample: false,
 		},
 		{
@@ -818,7 +818,7 @@ func TestHandleAddExample(t *testing.T) {
 				ChiPattern: "/test",
 			}},
 			wantStatus:  http.StatusBadRequest,
-			wantJSON:    map[string]any{"error": "No matching route found"},
+			wantJSON:    map[string]any{"error": "no matching route found"},
 			wantExample: false,
 		},
 	}

@@ -3,40 +3,23 @@ package extensions
 import (
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/mamonth/oasmock/internal/runtime"
-	mock_runtime "github.com/mamonth/oasmock/mock/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// newMockRuntimeEvaluatorFromSources creates a mock runtime.Evaluator using gomock
-// that simulates evaluation of expressions based on the provided data sources.
-// Currently supports only request source with query params.
-func newMockRuntimeEvaluatorFromSources(t *testing.T, sources map[string]runtime.DataSource) *mock_runtime.MockEvaluator {
+// newRequestEvaluatorFromSources builds an evaluator from real data sources.
+// Using the production runtime.Evaluator (rather than a mock that mirrors the
+// expression string construction) keeps these tests honest: a change to how
+// expressions resolve surfaces as a failed assertion, not a silently
+// re-matched mock expectation.
+func newRequestEvaluatorFromSources(t *testing.T, sources map[string]runtime.DataSource) runtime.Evaluator {
 	t.Helper()
-	ctrl := gomock.NewController(t)
-	t.Cleanup(ctrl.Finish)
-
-	mockEval := mock_runtime.NewMockEvaluator(ctrl)
-	// Allow AddSource to be called any number of times
-	mockEval.EXPECT().AddSource(gomock.Any(), gomock.Any()).AnyTimes()
-
-	// Build expected evaluations from request sources
+	eval := runtime.NewEvaluator()
 	for name, source := range sources {
-		if req, ok := source.(*runtime.RequestSource); ok {
-			for param, values := range req.QueryParams {
-				if len(values) > 0 {
-					expr := "{$" + name + ".query." + param + "}"
-					mockEval.EXPECT().Evaluate(expr).Return(values[0], nil).AnyTimes()
-				}
-			}
-		}
+		eval.AddSource(name, source)
 	}
-	// For any other expression, return nil, nil (simulate not found)
-	mockEval.EXPECT().Evaluate(gomock.Any()).Return(nil, nil).AnyTimes()
-
-	return mockEval
+	return eval
 }
 
 /*
@@ -270,7 +253,7 @@ func TestEvaluateParamsMatchLiteral(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			eval := newMockRuntimeEvaluatorFromSources(t, tt.sources)
+			eval := newRequestEvaluatorFromSources(t, tt.sources)
 
 			got, err := EvaluateParamsMatch(tt.pm, eval)
 			if tt.wantErr {
@@ -370,7 +353,7 @@ func TestEvaluateParamsMatchSchema(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			eval := newMockRuntimeEvaluatorFromSources(t, tt.sources)
+			eval := newRequestEvaluatorFromSources(t, tt.sources)
 
 			got, err := EvaluateParamsMatch(tt.pm, eval)
 			if tt.wantErr {
@@ -469,6 +452,39 @@ func TestMatchesJSONSchema(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, tt.want, got)
 			}
+		})
+	}
+}
+
+/*
+Scenario: Detecting connection references in a match
+Given a match whose condition key or string value references {$connection.*}
+When MatchReferencesConnection runs
+Then it reports true for key-side and value-side references and false otherwise
+
+Related spec scenarios: RS.EXT.24, RS.EXT.27
+*/
+func TestMatchReferencesConnection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		match map[string]any
+		want  bool
+	}{
+		{name: "connection id key", match: map[string]any{"{$connection.id}": "conn-1"}, want: true},
+		{name: "connection header key", match: map[string]any{"{$connection.header.x-tid}": "abc"}, want: true},
+		{name: "connection ref as value", match: map[string]any{"{$event.connectionId}": "{$connection.id}"}, want: true},
+		{name: "empty match", match: map[string]any{}, want: false},
+		{name: "event only", match: map[string]any{"{$event.name}": "orderCreated"}, want: false},
+		{name: "reply path only", match: map[string]any{"{$request.query.kind}": "alerts"}, want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, MatchReferencesConnection(tt.match))
 		})
 	}
 }

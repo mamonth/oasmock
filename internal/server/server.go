@@ -118,7 +118,8 @@ type Server struct {
 	routerSetupErr   error
 	hubMgr           *hubManager
 	eventBus         *eventBus
-	scheduler        *pushScheduler
+	manageStream     *manageStream
+	runtimeExamples  *runtimeExampleRegistry
 }
 
 // New creates a new mock server with the given configuration and loaded schemas.
@@ -205,9 +206,18 @@ func NewWithDependencies(config Config, schemas []SchemaInfo, deps Dependencies,
 		protocolAdapters: defaultProtocolAdapters(),
 	}
 	s.hubMgr = newHubManager(s.engine, s.protocolAdapters[asyncWSProtocol].(*wsProtocolAdapter), schemas)
+	s.manageStream = newManageStream(config.Verbose)
+	s.runtimeExamples = newRuntimeExampleRegistry()
 	s.eventBus = newEventBus(s.engine, s.hubMgr, config.Verbose)
-	s.eventBus.registerEventSubscriptions(schemas)
-	s.scheduler = newPushScheduler(func(channel string, payload []byte) { s.pushToChannel(channel, "", payload) })
+	s.eventBus.setObserver(func(env manageEnvelope) {
+		if s.manageStream != nil {
+			s.manageStream.broadcast(env)
+		}
+	})
+	if err := s.eventBus.registerEventSubscriptions(schemas); err != nil {
+		return nil, err
+	}
+	s.wireBuiltInHooks()
 
 	if rpcConfig != nil {
 		proto, err := newRpcProtocol(rpcConfig)
@@ -360,13 +370,27 @@ func (s *Server) buildRouteHandler(mapping *RouteMapping) (http.HandlerFunc, err
 
 func (s *Server) registerManagementRoutes(r chi.Router) {
 	r.Post("/_mock/examples", s.handleAddExample)
+	r.Delete("/_mock/examples/{exampleId}", s.handleDeleteExample)
 	r.Get("/_mock/requests", s.handleGetRequests)
-	r.Post("/_mock/events/fire", s.handleFireEvent)
+
+	// Canonical protocol-neutral async surface (design D1).
+	r.Post("/_mock/events", s.handleEvents)
+	r.Post("/_mock/async/push", s.handleAsyncPush)
+	r.Get("/_mock/async/consumers", s.handleAsyncConsumers)
+	r.Post("/_mock/async/disconnect", s.handleAsyncDisconnect)
+	r.Get("/_mock/stream", s.handleManageStream)
+
+	// Deprecated aliases kept for one release (design D1). The events/fire
+	// alias serves the legacy type-less contract (handleFireEventLegacy); the
+	// ws aliases share the canonical handlers.
+	r.Post("/_mock/events/fire", s.handleFireEventLegacy)
 	r.Post("/_mock/ws/push", s.handleAsyncPush)
 	r.Get("/_mock/ws/consumers", s.handleAsyncConsumers)
-	r.Post("/_mock/ws/schedule", s.handleAsyncSchedule)
-	r.Delete("/_mock/ws/schedule/{pushId}", s.handleAsyncScheduleStop)
 	r.Post("/_mock/ws/disconnect", s.handleAsyncDisconnect)
+
+	// Removed schedule surface answers 410 Gone pointing at /_mock/examples.
+	r.Post("/_mock/ws/schedule", s.handleGoneSchedule)
+	r.Delete("/_mock/ws/schedule/{pushId}", s.handleGoneSchedule)
 }
 
 func (s *Server) newRequestSource(r *http.Request, pathParams map[string]string) *runtime.RequestSource {
@@ -720,7 +744,9 @@ func (s *Server) BoundPort() int {
 // calls are no-ops that return the result of the first shutdown.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.registry.stopSweep()
-	s.shutdownSchedules()
+	if s.eventBus != nil {
+		s.eventBus.shutdown()
+	}
 	s.httpMu.Lock()
 	hs := s.httpServer
 	s.httpMu.Unlock()

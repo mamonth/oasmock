@@ -37,10 +37,19 @@ type signalRHub struct {
 	channels map[string]*asyncapi.Channel
 	ops      map[string]*asyncapi.Operation
 
+	// hooks is wired by the Server for built-in triggers and consumer
+	// lifecycle notifications (D5).
+	hooks builtInHooks
+
 	mu     sync.Mutex
 	tokens map[string]string // connection token -> connection id
 	conns  map[string]*signalRConnection
 	idSeq  int
+}
+
+// setHooks wires built-in trigger and lifecycle callbacks into the hub.
+func (h *signalRHub) setHooks(hooks builtInHooks) {
+	h.hooks = hooks
 }
 
 // signalRConnection is a single SignalR client connection.
@@ -51,6 +60,10 @@ type signalRConnection struct {
 	writer  *wsWriter
 	streams map[string]*signalRStream // invocationId -> open stream
 	server  *signalRHub
+	// query/headers capture the upgrade-time metadata for {$connection.*}
+	// evaluation (RS.EXT.27).
+	query   map[string][]string
+	headers map[string][]string
 }
 
 // signalRStream is an open client-initiated stream over a channel.
@@ -232,10 +245,26 @@ func (h *signalRHub) serveUpgrade(w http.ResponseWriter, r *http.Request) {
 		writer:  wr,
 		streams: make(map[string]*signalRStream),
 		server:  h,
+		query:   r.URL.Query(),
+		headers: lowerHeaderKeys(r.Header),
 	}
 	h.mu.Lock()
 	h.conns[connID] = sc
 	h.mu.Unlock()
+
+	channel := hubDefaultChannel(h)
+	info := ConsumerInfo{
+		ConnectionID: connID,
+		Channel:      channel,
+		Query:        sc.query,
+		Headers:      sc.headers,
+	}
+	if h.hooks.OnConnect != nil {
+		h.hooks.OnConnect(channel, connID, info)
+	}
+	if h.hooks.Connect != nil {
+		h.hooks.Connect(channel, connID, info)
+	}
 
 	defer func() {
 		h.mu.Lock()
@@ -243,6 +272,9 @@ func (h *signalRHub) serveUpgrade(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 		h.removeConnectionStreams(connID)
 		wr.close()
+		if h.hooks.OnDisconnect != nil {
+			h.hooks.OnDisconnect(channel, connID)
+		}
 	}()
 
 	h.runConnection(sc)
@@ -314,10 +346,53 @@ func (h *signalRHub) dispatch(sc *signalRConnection, env signalREnvelope) {
 	case signalRTypeStreamInvocation:
 		h.handleStreamInvocation(sc, env)
 	case signalRTypeInvocation:
+		// An inbound client invocation carries a payload; fire the receive
+		// built-in (RS.EVT.25) before answering. A single argument is exposed
+		// directly as the event payload (the common case for message mocks).
+		if h.hooks.Receive != nil {
+			payload := json.RawMessage("{}")
+			if len(env.Arguments) == 1 {
+				payload, _ = json.Marshal(env.Arguments[0])
+			} else if len(env.Arguments) > 1 {
+				payload, _ = json.Marshal(env.Arguments)
+			}
+			ch := hubChannelAddress(h)
+			if ch != "" {
+				h.hooks.Receive(ch, InboundMessage{
+					Payload:      payload,
+					ConnectionID: sc.id,
+				})
+			}
+		}
 		h.handleInvocation(sc, env)
 	case signalRTypeCancelInvocation:
 		h.handleCancelInvocation(sc, env)
 	}
+}
+
+// hubDefaultChannel returns the channel address a SignalR hub uses for
+// connection-level built-ins (connect/receive) and recipient metadata. A hub
+// may serve several channels, so selection is deterministic (the
+// lexicographically smallest prefixed address) rather than relying on map
+// iteration order. It is empty when the hub has no addressable channel.
+func hubDefaultChannel(h *signalRHub) string {
+	best := ""
+	for _, ch := range h.channels {
+		if ch.Address == "" {
+			continue
+		}
+		addr := asyncAddressWithPrefix(h.prefix, ch.Address)
+		if best == "" || addr < best {
+			best = addr
+		}
+	}
+	return best
+}
+
+// hubChannelAddress returns the default channel address of a hub (used by the
+// receive built-in dispatch).
+func hubChannelAddress(h *signalRHub) string {
+	return hubDefaultChannel(h)
 }
 
 // handleStreamInvocation answers a StreamInvocation by channel ID with the

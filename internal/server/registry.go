@@ -78,6 +78,33 @@ func (r *exampleRegistry) addDynamic(key string, ex dynamicExample) {
 	r.dynamicExamples[key] = append(r.dynamicExamples[key], ex)
 }
 
+// removeDynamic removes every dynamic example with the given id (onceID) from
+// all route keys and its once marker, reporting whether any was removed.
+func (r *exampleRegistry) removeDynamic(id string) bool {
+	r.dyMu.Lock()
+	defer r.dyMu.Unlock()
+	removed := false
+	for key, examples := range r.dynamicExamples {
+		kept := examples[:0]
+		for _, ex := range examples {
+			if ex.onceID == id {
+				removed = true
+				r.onceMu.Lock()
+				delete(r.onceExamples, id)
+				r.onceMu.Unlock()
+				continue
+			}
+			kept = append(kept, ex)
+		}
+		if len(kept) == 0 {
+			delete(r.dynamicExamples, key)
+		} else {
+			r.dynamicExamples[key] = kept
+		}
+	}
+	return removed
+}
+
 // selectDynamic returns the first dynamic example matching a route key that is
 // not once-used, not expired and whose conditions evaluate, along with its
 // index key. It returns nil when none matches.

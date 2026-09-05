@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 	"github.com/mamonth/oasmock/internal/runtime"
 )
@@ -158,7 +156,8 @@ func matchingHubChannel(hub *signalRHub, address string) string {
 	return ""
 }
 
-// handleAsyncConsumers lists active consumers per channel (RS.AMG.8-9).
+// handleAsyncConsumers lists active consumers per channel (RS.AMG.8-9) or
+// across all channels when the channel filter is omitted (RS.AMG.22).
 func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 	channel := r.URL.Query().Get("channel")
 	type consumerInfo struct {
@@ -169,12 +168,31 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 	consumers := []consumerInfo{}
 
 	if reg := s.wsRegistry(); reg != nil {
-		conns := reg.connections(channel)
+		var conns []*wsConnection
+		if channel == "" {
+			conns = reg.allConnections()
+		} else {
+			conns = reg.connections(channel)
+		}
 		for _, ws := range conns {
-			consumers = append(consumers, consumerInfo{ConnectionID: ws.id, Channel: channel})
+			consumers = append(consumers, consumerInfo{ConnectionID: ws.id, Channel: ws.channel})
 		}
 	}
-	if hub := s.hubForAddress(channel); hub != nil {
+	if channel == "" {
+		// Flat union across every hub channel's open streams (RS.AMG.22).
+		for _, hub := range s.hubMgr.hubs {
+			for channelID := range hub.channels {
+				address := asyncAddressWithPrefix(hub.prefix, hub.channels[channelID].Address)
+				for _, st := range hub.openStreamsForChannel(channelID) {
+					consumers = append(consumers, consumerInfo{
+						ConnectionID: st["connectionId"],
+						Channel:      address,
+						Streams:      []map[string]string{st},
+					})
+				}
+			}
+		}
+	} else if hub := s.hubForAddress(channel); hub != nil {
 		if id := matchingHubChannel(hub, channel); id != "" {
 			for _, st := range hub.openStreamsForChannel(id) {
 				consumers = append(consumers, consumerInfo{
@@ -196,63 +214,12 @@ func (h *signalRHub) pushPayload(channelID string, payload []byte) {
 	h.pushToStreams(channelID, payload, channelID)
 }
 
-// handleAsyncSchedule schedules a recurring push (RS.AMG.12).
-func (s *Server) handleAsyncSchedule(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Channel  string         `json:"channel"`
-		Interval int            `json:"interval"`
-		Payload  map[string]any `json:"payload"`
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if req.Channel == "" || req.Interval <= 0 {
-		writeJSONError(w, http.StatusBadRequest, "channel and a positive interval are required")
-		return
-	}
-	payload, err := json.Marshal(req.Payload)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid payload")
-		return
-	}
-
-	id := "push-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	s.scheduler.add(&recurringPush{
-		id:       id,
-		channel:  req.Channel,
-		interval: time.Duration(req.Interval) * time.Millisecond,
-		payload:  payload,
-		stop:     make(chan struct{}),
-	})
-
-	go s.scheduler.run(id)
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "pushId": id})
-}
-
-// shutdownSchedules stops all recurring push jobs (RS.AMG.12).
-func (s *Server) shutdownSchedules() {
-	s.scheduler.shutdown()
-}
-
-// handleAsyncScheduleStop cancels a recurring push (RS.AMG.13).
-func (s *Server) handleAsyncScheduleStop(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "pushId")
-	job, ok := s.scheduler.stop(id)
-	if !ok {
-		writeJSONError(w, http.StatusNotFound, "unknown pushId")
-		return
-	}
-	close(job.stop)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+// handleGoneSchedule answers the removed /_mock/ws/schedule surface with HTTP
+// 410 Gone pointing at POST /_mock/examples (design D1). The recurring-delivery
+// capability now lives on unified example injection with a runtime interval.
+func (s *Server) handleGoneSchedule(w http.ResponseWriter, r *http.Request) {
+	writeJSONError(w, http.StatusGone,
+		"the async schedule endpoint is removed; use POST /_mock/examples with an AsyncAPI target, response.body and interval (and DELETE /_mock/examples/{exampleId} to stop)")
 }
 
 // handleAsyncDisconnect force-disconnects a consumer (RS.AMG.14-17).

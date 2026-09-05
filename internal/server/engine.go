@@ -658,31 +658,6 @@ func (e *exampleEngine) RenderMessageSpecs(messages []*loader.MessageSpec, prefi
 	return 0, nil, nil
 }
 
-// renderMessageSpecsWithEvent evaluates message specs with an event payload
-// registered in the evaluator as {$event.*}.
-func (e *exampleEngine) RenderMessageSpecsWithEvent(messages []*loader.MessageSpec, prefix, opID string, payload map[string]any) (int, []byte, error) {
-	evaluator := runtime.NewEvaluator()
-	evaluator.AddSource("state", e.NewStateSource(prefix))
-	evaluator.AddSource("env", e.NewEnvSource())
-	evaluator.AddSource("event", &runtime.EventSource{Data: payload})
-
-	for _, msg := range messages {
-		example, _ := e.SelectAsyncExample(msg, evaluator, opID)
-		if example == nil {
-			continue
-		}
-		if stateMap, ok := extensions.ValueSetState(example); ok {
-			e.ApplySetState(stateMap, evaluator, prefix)
-		}
-		body, err := e.RenderAsyncPayload(example, evaluator)
-		if err != nil {
-			return 0, nil, err
-		}
-		return 1, body, nil
-	}
-	return 0, nil, nil
-}
-
 // asyncRequestSource adapts an InboundMessage to a runtime data source.
 func (e *exampleEngine) asyncRequestSource(in InboundMessage) *runtime.RequestSource {
 	headers := make(map[string][]string, len(in.Headers))

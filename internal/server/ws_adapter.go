@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,11 +87,14 @@ func (w *wsWriter) close() {
 	_ = w.conn.Close()
 }
 
-// wsConnection is a single registered WebSocket consumer connection.
+// wsConnection is a single registered WebSocket consumer connection. Metadata
+// (query, headers) is captured at upgrade for {$connection.*} evaluation.
 type wsConnection struct {
 	id      string
 	channel string
 	writer  *wsWriter
+	query   map[string][]string
+	headers map[string][]string
 }
 
 // connectionRegistry tracks active WebSocket consumer connections per channel,
@@ -111,17 +115,19 @@ func newConnectionRegistry() *connectionRegistry {
 }
 
 // register adds a connection and returns a fresh connection id.
-func (r *connectionRegistry) register(channel string, writer *wsWriter) string {
+func (r *connectionRegistry) register(channel, id string, wr *wsWriter, query, headers map[string][]string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.autoID++
-	id := "conn-" + strconv.Itoa(r.autoID)
-	conn := &wsConnection{id: id, channel: channel, writer: writer}
-	r.byID[id] = conn
+	if id == "" {
+		r.autoID++
+		id = "conn-" + strconv.Itoa(r.autoID)
+	}
+	c := &wsConnection{id: id, channel: channel, writer: wr, query: query, headers: headers}
+	r.byID[id] = c
 	if r.byChan[channel] == nil {
 		r.byChan[channel] = make(map[string]*wsConnection)
 	}
-	r.byChan[channel][id] = conn
+	r.byChan[channel][id] = c
 	return id
 }
 
@@ -151,11 +157,65 @@ func (r *connectionRegistry) connections(channel string) []*wsConnection {
 	return out
 }
 
+// allConnections returns every registered connection across all channels.
+func (r *connectionRegistry) allConnections() []*wsConnection {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*wsConnection, 0, len(r.byID))
+	for _, ws := range r.byID {
+		out = append(out, ws)
+	}
+	return out
+}
+
+// connection returns a single connection by id.
+func (r *connectionRegistry) connection(id string) (*wsConnection, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ws, ok := r.byID[id]
+	return ws, ok
+}
+
+// lowerHeaderKeys lowercases header keys so {$connection.header.<key>} lookups
+// are case-insensitive.
+func lowerHeaderKeys(h http.Header) map[string][]string {
+	out := make(map[string][]string, len(h))
+	for k, v := range h {
+		out[strings.ToLower(k)] = v
+	}
+	return out
+}
+
+// broadcast sends a payload to every connected consumer of a channel address.
+func (a *wsProtocolAdapter) broadcast(address string, payload []byte) {
+	if a == nil || a.registry == nil {
+		return
+	}
+	for _, ws := range a.registry.connections(address) {
+		ws.writer.write(payload)
+	}
+}
+
+// builtInHooks carries the optional built-in trigger and lifecycle callbacks
+// the Server wires in so the adapter never reaches into Server (D5, RS.EVT.24-25).
+type builtInHooks struct {
+	// Connect fires the connect built-in schema-local for a just-connected
+	// consumer with its connection context as the recipient.
+	Connect func(channel string, connID string, info ConsumerInfo)
+	// Receive fires the receive built-in schema-local with the inbound message
+	// exposed in the event context.
+	Receive func(channel string, in InboundMessage)
+	// OnConnect/OnDisconnect notify consumer lifecycle observers.
+	OnConnect    func(channel string, connID string, info ConsumerInfo)
+	OnDisconnect func(channel string, connID string)
+}
+
 // wsProtocolAdapter serves AsyncAPI ws channels as raw WebSockets (RS.ASP.2,
 // RS.ASP.6-7, RS.ASP.9). When the document declares root x-signalr the session
 // is handed to the SignalR overlay instead (design D7).
 type wsProtocolAdapter struct {
 	registry *connectionRegistry
+	hooks    builtInHooks
 }
 
 func newWSProtocolAdapter() *wsProtocolAdapter {
@@ -174,10 +234,23 @@ func (a *wsProtocolAdapter) Handler(mapping *RouteMapping, handler MessageHandle
 		}
 		wr := newWSWriter(conn)
 		channel := mapping.Path
-		id := a.registry.register(channel, wr)
+		id := a.registry.register(channel, "", wr, r.URL.Query(), lowerHeaderKeys(r.Header))
 		defer a.registry.unregister(id)
 
 		slog.Debug("WebSocket consumer connected", "connectionId", id, "channel", channel)
+
+		info := ConsumerInfo{
+			ConnectionID: id,
+			Channel:      channel,
+			Query:        r.URL.Query(),
+			Headers:      lowerHeaderKeys(r.Header),
+		}
+		if a.hooks.OnConnect != nil {
+			a.hooks.OnConnect(channel, id, info)
+		}
+		if a.hooks.Connect != nil {
+			a.hooks.Connect(channel, id, info)
+		}
 
 		// Receive-operation emission on connect (RS.ASP.7).
 		if mapping.Action == "receive" {
@@ -197,11 +270,15 @@ func (a *wsProtocolAdapter) Handler(mapping *RouteMapping, handler MessageHandle
 				wr.writeMessage(websocket.PongMessage, payload)
 				continue
 			}
-			out, herr := handler.HandleMessage(r.Context(), InboundMessage{
+			in := InboundMessage{
 				Payload:      payload,
 				ConnectionID: id,
 				PathParams:   addressParams(r),
-			})
+			}
+			if a.hooks.Receive != nil {
+				a.hooks.Receive(channel, in)
+			}
+			out, herr := handler.HandleMessage(r.Context(), in)
 			if herr != nil {
 				wr.writeError(herr)
 				continue
@@ -211,6 +288,10 @@ func (a *wsProtocolAdapter) Handler(mapping *RouteMapping, handler MessageHandle
 				out = []byte("{}")
 			}
 			wr.write(out)
+		}
+
+		if a.hooks.OnDisconnect != nil {
+			a.hooks.OnDisconnect(channel, id)
 		}
 	}
 }

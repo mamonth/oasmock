@@ -23,6 +23,103 @@ examples:
 
 **Alias**: x-mock-params-match — deprecated, kept for backward compatibility
 
+### Event-context matching (async-driven examples)
+
+On an AsyncAPI message example, `x-mock-match` selects the example against the event context instead of a request context. The event context exposes:
+
+| Expression         | Description                                                       |
+|--------------------|-------------------------------------------------------------------|
+| `{$event.name}`    | Event identity: the named-event name or the built-in kind (`connect`/`receive`) |
+| `{$event.data}`    | The whole event payload                                           |
+| `{$event.<field>}` | A single event payload field                                      |
+
+`name` and `data` are reserved metadata names; payload fields with those names are shadowed (reachable via `{$event.data.<field>}`).
+
+```yaml
+examples:
+  orderAlert:
+    payload:
+      severity: '{$event.priority}'
+    x-mock-match:
+      '{$event.name}': orderCreated
+```
+
+An example whose `x-mock-match` references `{$event.*}` is classified at load as event-driven. Mixing `{$event.*}` with `{$request.*}`/`{$message.*}`/`{$channel.*}` in the same match, or declaring both `x-mock-interval` and `x-mock-match`, is rejected at load.
+
+When a match pins the identity (`{$event.name}`), the condition value **must be a literal string**: an expression value (e.g. `{$state.envName}`) is rejected at load, because the produced subscription key could never match a fired identity. A match that references the event context without an `{$event.name}` condition (e.g. `'{$connection.id}': '{$event.connectionId'}`) still registers as an event-driven example with a **wildcard identity** that evaluates against every fired event.
+
+Condition **values** follow the context of their key: on an event/connection key a full-expression value (e.g. `'{$connection.id}': '{$event.connectionId}'`) is resolved before comparison, while values on the reply-path contexts (`{$request.*}`/`{$message.*}`/`{$channel.*}`) are always compared literally.
+
+### Per-connection recipient matching (`{$connection.*}`)
+
+For event-driven examples, conditions referencing the connection context become a **per-connection recipient filter** evaluated at delivery time in two phases: non-connection conditions are evaluated once per emission, and `{$connection.*}` conditions are evaluated against each candidate consumer. Only consumers satisfying both phases receive the message. When no condition references `{$connection.*}`, delivery broadcasts to all consumers of the channel.
+
+| Expression                         | Description                                          |
+|------------------------------------|------------------------------------------------------|
+| `{$connection.id}`                 | Consumer connection id                               |
+| `{$connection.channel}`            | Channel address the consumer connected to            |
+| `{$connection.query.<key>}`        | Query parameter captured at upgrade                  |
+| `{$connection.header.<key>}`       | Request header captured at upgrade (lower-cased)     |
+
+```yaml
+examples:
+  targeted:
+    payload:
+      ring: '{$event.data}'
+    x-mock-match:
+      '{$event.name}': orderCreated
+      '{$connection.id}': '{$event.connectionId}'
+```
+
+A condition referencing `{$connection.*}` on a reply-path example (no connection context available) never matches, and in verbose mode a warning is logged.
+
+### x-mock-interval / x-mock-delay
+
+**Location**: AsyncAPI message example object
+
+Timing-only sibling extensions that keep `x-mock-match` pure. Neither is an event identity. A periodically driven example is single-trigger: declaring `x-mock-interval` together with any `x-mock-match` is **rejected at load** (a periodic emission has no match context to honor — periodicity and selection are mutually exclusive).
+
+- `x-mock-interval`: positive integer milliseconds marking a **periodically driven** example — the message is emitted repeatedly at that cadence until removed or the server shuts down.
+
+```yaml
+examples:
+  ticker:
+    payload:
+      seq: '{$state.counter}'
+    x-mock-interval: 1000
+```
+
+- `x-mock-delay`: integer milliseconds (default 0) delaying emission after an event fire.
+
+```yaml
+examples:
+  welcome:
+    payload:
+      msg: hello
+    x-mock-match:
+      '{$event.name}': connect
+    x-mock-delay: 150
+```
+
+Timing values are integer milliseconds: a fractional value (e.g. `x-mock-interval: 2.5`) is rejected at load instead of being silently truncated. Periodically driven examples honor `x-mock-skip` like every other example and are not emitted while it is set.
+
+### x-send-events (deprecated)
+
+**Location**: AsyncAPI message example object
+
+**Deprecated**: kept for one release with a loader mapping shim. Each entry is translated to the unified form during loading with a verbose-mode deprecation note:
+
+- `{on: <name>}` → `x-mock-match: {'{$event.name}': <name>}`
+- `{on: connect, wait: N}` → `x-mock-match: {'{$event.name}': connect}` + `x-mock-delay: N`
+- `{on: receive}` → `x-mock-match: {'{$event.name}': receive}`
+- `{on: cron, wait: N}` → `x-mock-interval: N`
+
+### Runtime matches and timing (management API)
+
+`POST /_mock/examples` mirrors the extensions for AsyncAPI targets with `match`, `interval` and `delay` fields; the same classification and delivery rules apply. See `api/openapi.yaml`.
+
+> **Not idempotent**: every successful `POST /_mock/examples` registers a distinct example (and, for interval targets, a separate delivery job). Re-sending a request after a lost response creates a second subscription; keep the returned `id` and stop an interval example with `DELETE /_mock/examples/{id}`.
+
 ## x-mock-skip
 
 **Location**: OAS example object
@@ -133,3 +230,5 @@ Value modifiers can be specified after a `|` sign. Example: `{$request.path.para
 | `{$request.cookie.cookieName}`         | Parsed request cookies                              |
 | `{$state.someSavedParam}`              | State data (set previously with `x-mock-set-state`) |
 | `{$env.ENV_VAR}`                       | Runtime environment variables                       |
+| `{$event.name}` / `{$event.data}` / `{$event.<field>}` | Event identity, whole payload, and payload fields (async-driven examples) |
+| `{$connection.id}` / `{$connection.channel}` / `{$connection.query.<key>}` / `{$connection.header.<key>}` | Per-connection recipient matching (event delivery) |
