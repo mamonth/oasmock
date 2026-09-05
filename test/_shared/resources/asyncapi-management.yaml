@@ -1,0 +1,34 @@
+asyncapi: 3.0.0
+info:
+  title: Alerts
+  version: 1.0.0
+channels:
+  alerts:
+    address: /alerts
+    bindings:
+      ws:
+        method: GET
+    messages:
+      alertMsg:
+        examples:
+          - name: connectWelcome
+            payload:
+              msg: "welcome"
+            x-mock-match:
+              '{$event.name}': "connect"
+          - name: levelUp
+            payload:
+              level: "{$event.level}"
+              msg: "{$event.msg}"
+            x-mock-match:
+              '{$event.name}': "levelUp"
+          - name: legacyAlert
+            payload:
+              legacy: "{$event.level}"
+            x-send-events:
+              - on: legacyAlert
+operations:
+  receiveAlerts:
+    action: receive
+    channel:
+      $ref: '#/channels/alerts'

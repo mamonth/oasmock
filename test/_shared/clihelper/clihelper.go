@@ -311,18 +311,31 @@ func StopServer(t *testing.T, cmd *exec.Cmd) {
 		}
 	}
 
-	// Wait a bit for process to exit
-	done := make(chan struct{})
-	go func() {
-		cmd.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Process exited
-	case <-time.After(2 * time.Second):
+	// Wait a bit for the process to exit without racing the Wait goroutine
+	// spawned by Run. A second cmd.Wait() here is a data race; probing
+	// liveness with signal 0 is atomic and never consumes the reaping Wait.
+	if err := waitForExit(cmd, 2*time.Second); err != nil {
 		t.Logf("Timeout waiting for process to exit")
+	}
+}
+
+// waitForExit polls a process's liveness until it exits or the timeout elapses.
+// It probes the PID with signal 0 (atomic, race-free) instead of calling Wait,
+// which must only ever be invoked once per exec.Cmd.
+func waitForExit(cmd *exec.Cmd, timeout time.Duration) error {
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			return fmt.Errorf("process did not exit within %s", timeout)
+		case <-ticker.C:
+			if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+				// ESRCH ("no such process") or "os: process already finished".
+				return nil
+			}
+		}
 	}
 }
 

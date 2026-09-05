@@ -156,9 +156,11 @@ flowchart LR
   - `registry.go` - `exampleRegistry`: x-mock-once markers, dynamic examples, TTL sweep
   - `convert.go` - Single loader↔server route/type conversion points
   - `hubmanager.go` - `hubManager` (implements `ConsumerBus`): SignalR hubs + ws broadcast
-  - `event_server.go` - `eventBus`: event broker coordination on `MessageRenderer` + `ConsumerBus`
+  - `event_server.go` - `eventBus`: event broker coordination on `MessageRenderer` + `ConsumerBus`; classification, partition delivery, management-stream observer
   - `event_broker.go` - `eventBroker`: subscription registry + dispatch (pure)
-  - `scheduler.go` - `pushScheduler`: recurring push jobs (pure)
+  - `job_scheduler.go` - `jobScheduler`: per-example interval jobs (pure)
+  - `manage_ws.go` - management WebSocket stream (`/_mock/stream`) with envelope broadcasting
+  - `builtin_triggers.go` - connect/receive built-in firing + consumer lifecycle notifications
   - `server_management.go` - Management API endpoints
   - `server_example.go` / `server_eval.go` / `server_state.go` - Thin Server forwarders (selection/templating/state)
   - `jsonrpc.go` - JSON-RPC handler (gateway requests)
@@ -340,8 +342,10 @@ OASMock autodetects AsyncAPI 3.0.0/3.1.0 files (root key `asyncapi`, version maj
 - **Neutral document view** (`internal/asyncapi/`): channels, operations, messages, bindings, examples with `x-mock-*` extensions; root `x-signalr` capture. The vendored `benelser/go-asyncapi` parser is isolated behind this package.
 - **Protocol adapters** (`internal/server/protocol.go`): `ProtocolAdapter` strategies registered keyed by protocol. `httpAdapter` reuses the HTTP pipeline; `wsAdapter` upgrades WebSockets and tracks a connection registry.
 - **SignalR overlay** (`internal/server/signalr_hub.go`): a document with root `x-signalr` is served as one SignalR hub — `POST {hubPath}/negotiate`, token-correlated ws upgrade, `\x1e` framing, handshake. Streams map to channels (`StreamInvocation` → held-open `StreamItem`); one-shot invocations map to operations (`Invocation` → `Completion`); event-driven items append into open streams via the open-stream registry.
-- **Event broker** (`internal/server/event_broker.go`): OpenAPI examples fire named events via `x-event-trigger`; AsyncAPI message examples subscribe via `x-send-events` (named + `connect`/`cron`/`receive`). Delivery is broadcast with client-side filtering (`{$event.*}` templating). `POST /_mock/events/fire` fires events ad-hoc.
-- **Async mocking management API**: `/_mock/ws/push` (delayed/targeted/broadcast), `/_mock/ws/consumers` (discovery incl. SignalR streams), `/_mock/ws/schedule` (recurring push, cancellable), `/_mock/ws/disconnect` (lifecycle control). `/_mock/examples` accepts AsyncAPI route identifiers (protocol + channel).
+- **Event broker** (`internal/server/event_broker.go`): OpenAPI examples fire named events via `x-event-trigger`; AsyncAPI message examples are classified at load (event-driven via `{$event.*}` `x-mock-match`, periodically driven via `x-mock-interval`, or reply) and registered keyed by match identity + schema scope. Classification is strict and atomic: mixed match contexts, an interval alongside any `x-mock-match`, a non-literal event identity, or fractional timing values are load errors, and a failed schema never partially registers. Legacy `x-send-events` entries map through a deprecation shim. Delivery runs the shared selection pipeline against the event context and narrows to per-connection recipients via a two-phase `{$connection.*}` partition (broadcast fast path otherwise). `POST /_mock/events` (with a `type` discriminator) fires events ad-hoc; built-ins `connect`/`receive` are actually fired from ws/SignalR lifecycle and inbound hooks gated by a cheap `hasSubscribers` check.
+- **Scheduler** (`internal/server/job_scheduler.go`): per-example `{id, interval, deliver func()}` interval jobs drive periodically driven examples, with per-delivery templating against current state/env; shutdown cancels all jobs, `DELETE /_mock/examples/{id}` cancels individual ones.
+- **Async mocking management API**: `/_mock/async/{push,consumers,disconnect}` (canonical, protocol-neutral prefix; legacy `/_mock/ws/*` kept as deprecated aliases), `/_mock/events` (type-discriminated fire), `/_mock/examples` (unified sync/async injection with strict oneOf validation and runtime `match`/`interval`/`delay`, plus `DELETE /_mock/examples/{id}`), `/_mock/stream` (management WebSocket notifications). The removed `/_mock/ws/schedule*` surface answers `410 Gone` pointing at the examples endpoint.
+- **Management stream** (`internal/server/manage_ws.go`): `/_mock/stream` upgrade handler with connect-time `events`/`channels` filters; pushes `event`/`push`/`consumer`/`schedule` envelopes from the eventBus observer, consumer lifecycle hooks and scheduler start/stop. V1 is notifications-only (pings/pongs keep the socket alive).
 - **Templating parity**: `{$message.*}`, `{$channel.*}`, `{$event.*}` data sources; `ExampleValue` wrapper unifies selection across OpenAPI/AsyncAPI; state/history integration uses each schema's isolated namespace.
 - **Unsupported protocols** (`amqp`, `kafka`, ...) fail startup with exit code 3.
 

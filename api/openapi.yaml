@@ -14,6 +14,12 @@ paths:
       description: |
         Adds a custom example to the mock server for a given path and method.
         The example can be conditional based on request parameters.
+
+        Note: the operation is not idempotent. Each successful call registers a
+        distinct example (and, for async interval examples, a separate delivery
+        job). Re-sending a request after a lost response creates a second
+        subscription; capture the returned `id` and use `DELETE
+        /_mock/examples/{id}` to stop recurring delivery.
       requestBody:
         required: true
         content:
@@ -31,6 +37,29 @@ paths:
           description: Invalid request
         '500':
           description: Internal server error
+  /examples/{exampleId}:
+    delete:
+      operationId: deleteExample
+      summary: Remove a dynamic example
+      description: |
+        Removes a dynamically added example, cancelling any recurring interval
+        delivery registered under that example id.
+      parameters:
+        - name: exampleId
+          in: path
+          required: true
+          description: Example id returned when the example was added
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Example removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncActionResponse'
+        '404':
+          description: Unknown exampleId
   /requests:
     get:
       summary: Retrieve request history
@@ -81,13 +110,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RequestHistoryResponse'
-  /events/fire:
+  /events:
     post:
       operationId: fireEvent
       summary: Fire a named event on the event bus
       description: |
         Fires a named event ad-hoc, delivering it (immediately or after a delay)
-        to x-send-events consumers across the loaded schemas.
+        to event-driven message examples across the loaded schemas. The request
+        carries a required type discriminator — V1 supports "fire" only.
       requestBody:
         required: true
         content:
@@ -102,8 +132,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/AsyncActionResponse'
         '400':
+          description: Invalid request (missing/unknown type or event)
+  /events/fire:
+    post:
+      operationId: fireEventLegacy
+      summary: Fire a named event (deprecated alias)
+      description: |
+        Deprecated alias of POST /_mock/events. Accepts the legacy body without
+        the `type` discriminator (defaults to "fire") alongside the new shape.
+        Kept for backward compatibility; use /_mock/events.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FireEventRequest'
+      deprecated: true
+      responses:
+        '200':
+          description: Event accepted
+        '400':
           description: Invalid request
-  /ws/push:
+  /async/push:
     post:
       operationId: pushToChannel
       summary: Push a message to channel consumers
@@ -128,18 +178,19 @@ paths:
           description: Invalid request
         '404':
           description: Unknown connectionId
-  /ws/consumers:
+  /async/consumers:
     get:
       operationId: listConsumers
       summary: List connected consumers per channel
       description: |
         Returns the currently connected consumers for an AsyncAPI channel,
-        including open SignalR streams when applicable.
+        including open SignalR streams when applicable. The channel parameter is
+        optional: when omitted, consumers across all channels are returned.
       parameters:
         - name: channel
           in: query
-          required: true
-          description: Channel address
+          required: false
+          description: Channel address (omit for consumers across all channels)
           schema:
             type: string
       responses:
@@ -149,45 +200,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConsumersResponse'
-  /ws/schedule:
-    post:
-      operationId: scheduleRecurringPush
-      summary: Schedule a recurring push
-      description: |
-        Schedules a message to be pushed to a channel at a fixed interval until
-        cancelled by its push ID.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ScheduleRequest'
-      responses:
-        '200':
-          description: Schedule created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AsyncActionResponse'
-        '400':
-          description: Invalid request
-  /ws/schedule/{pushId}:
-    delete:
-      operationId: stopRecurringPush
-      summary: Stop a recurring push
-      parameters:
-        - name: pushId
-          in: path
-          required: true
-          description: Push ID returned by the schedule endpoint
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Schedule stopped
-        '404':
-          description: Unknown pushId
-  /ws/disconnect:
+  /async/disconnect:
     post:
       operationId: disconnectConsumer
       summary: Force-disconnect a consumer
@@ -203,6 +216,134 @@ paths:
       responses:
         '200':
           description: Consumer disconnected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncActionResponse'
+        '400':
+          description: Invalid request
+        '404':
+          description: Unknown connectionId
+  /stream:
+    get:
+      operationId: managementStream
+      summary: Management WebSocket stream (notifications)
+      description: |
+        Upgrades to a WebSocket stream of runtime notifications. V1 is
+        notifications-only: filters are set at connect time via the events and
+        channels query parameters (comma-separated, * wildcard) and the server
+        pushes JSON envelopes of type event | push | consumer | schedule.
+        A non-upgrade request is rejected with 405.
+      parameters:
+        - name: events
+          in: query
+          description: Comma-separated event-name globs to subscribe to (omit for all)
+          schema:
+            type: string
+        - name: channels
+          in: query
+          description: Comma-separated channel-address globs to subscribe to (omit for all)
+          schema:
+            type: string
+      responses:
+        '101':
+          description: |
+            Switching Protocols — the connection upgrades to a WebSocket and the
+            server pushes ManageEnvelope frames (per the envelope schemas; not an
+            HTTP response body)
+        '405':
+          description: Non-upgrade request rejected
+  /ws/push:
+    post:
+      operationId: pushToChannelLegacy
+      summary: Push a message (deprecated alias)
+      deprecated: true
+      description: Deprecated alias of POST /_mock/async/push.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushRequest'
+      responses:
+        '200':
+          description: Push accepted
+        '400':
+          description: Invalid request
+        '404':
+          description: Unknown connectionId
+  /ws/consumers:
+    get:
+      operationId: listConsumersLegacy
+      summary: List connected consumers (deprecated alias)
+      deprecated: true
+      description: Deprecated alias of GET /_mock/async/consumers.
+      parameters:
+        - name: channel
+          in: query
+          required: false
+          description: Channel address (omit for all channels)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Consumers listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsumersResponse'
+  /ws/schedule:
+    post:
+      operationId: scheduleRecurringPush
+      summary: Schedule a recurring push (removed)
+      description: |
+        Removed. Recurring delivery is expressed via the interval field on
+        POST /_mock/examples for an AsyncAPI target. This path answers 410 Gone.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleRequest'
+      responses:
+        '410':
+          description: Gone — use POST /_mock/examples with interval
+  /ws/schedule/{pushId}:
+    delete:
+      operationId: stopRecurringPush
+      summary: Stop a recurring push (removed)
+      description: |
+        Removed. Recurring delivery is stopped with DELETE /_mock/examples/{id}.
+        This path answers 410 Gone.
+      parameters:
+        - name: pushId
+          in: path
+          required: true
+          description: Push ID returned by the former schedule endpoint
+          schema:
+            type: string
+      responses:
+        '410':
+          description: Gone — use DELETE /_mock/examples/{exampleId}
+  /ws/disconnect:
+    post:
+      operationId: disconnectConsumerLegacy
+      summary: Force-disconnect a consumer (deprecated alias)
+      deprecated: true
+      description: Deprecated alias of POST /_mock/async/disconnect.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisconnectRequest'
+      responses:
+        '200':
+          description: Consumer disconnected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncActionResponse'
         '400':
           description: Invalid request
         '404':
@@ -213,10 +354,29 @@ components:
       type: object
       required:
         - response
+      oneOf:
+        - title: sync (OpenAPI)
+          required:
+            - path
+            - response
+          not:
+            anyOf:
+              - required: [protocol]
+              - required: [channel]
+              - required: [match]
+              - required: [interval]
+              - required: [delay]
+        - title: async (AsyncAPI)
+          required:
+            - channel
+            - response
+          not:
+            anyOf:
+              - required: [path]
       properties:
         path:
           type: string
-          description: The request path (including path parameters) to match
+          description: The request path (including path parameters) to match (OpenAPI target)
         protocol:
           type: string
           enum: [http, ws]
@@ -229,6 +389,27 @@ components:
           enum: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
           default: GET
           description: HTTP method to match
+        match:
+          type: object
+          additionalProperties: true
+          description: |
+            AsyncAPI-only. Mirrors the x-mock-match extension against the event
+            and connection contexts ({$event.*}, {$connection.*}) to drive live
+            event-driven delivery. At least one condition must reference the
+            event context; a connection-only or literal match is rejected.
+        interval:
+          type: integer
+          minimum: 1
+          description: |
+            AsyncAPI-only. Positive millisecond cadence for recurring delivery
+            (mirrors x-mock-interval).
+        delay:
+          type: integer
+          minimum: 0
+          default: 0
+          description: |
+            AsyncAPI-only. Millisecond delay before emission after a fire
+            (mirrors x-mock-delay).
         once:
           type: boolean
           default: false
@@ -256,11 +437,12 @@ components:
           $ref: '#/components/schemas/ExampleResponse'
     ExampleResponse:
       type: object
+      required:
+        - code
       properties:
         code:
           type: integer
-          description: HTTP status code
-          default: 200
+          description: HTTP status code (required)
         headers:
           type: object
           additionalProperties:
@@ -285,6 +467,13 @@ components:
         id:
           type: string
           description: Unique identifier for the added example
+        kind:
+          type: string
+          enum: [event, interval]
+          description: Trigger kind for async-driven examples (match/interval)
+        jobID:
+          type: string
+          description: Scheduler job id for interval-driven examples
     RequestHistoryItem:
       type: object
       properties:
@@ -319,8 +508,13 @@ components:
     FireEventRequest:
       type: object
       required:
+        - type
         - event
       properties:
+        type:
+          type: string
+          enum: [fire]
+          description: Action discriminator. V1 supports "fire" only.
         event:
           type: string
           description: The named event to fire
@@ -371,6 +565,69 @@ components:
         payload:
           type: object
           description: Message payload pushed at each interval
+    ManageEnvelope:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum: [event, push, consumer, schedule]
+          description: Envelope kind
+        ts:
+          type: integer
+          description: Emit timestamp in milliseconds since epoch
+        event:
+          type: object
+          properties:
+            name:
+              type: string
+            schema:
+              type: string
+            global:
+              type: boolean
+            payload:
+              type: object
+              additionalProperties: true
+        push:
+          type: object
+          properties:
+            channel:
+              type: string
+            connectionId:
+              type: string
+            payload:
+              type: object
+              additionalProperties: true
+        consumer:
+          type: object
+          properties:
+            action:
+              type: string
+              enum: [connected, disconnected]
+            connectionId:
+              type: string
+            channel:
+              type: string
+            streams:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+        schedule:
+          type: object
+          properties:
+            action:
+              type: string
+              enum: [started, stopped]
+              description: started when an interval example registers, stopped when it is removed or cancelled
+            exampleId:
+              type: string
+              description: Client-facing example id (the POST /_mock/examples id for runtime examples, the spec example name otherwise); identical for the started/stopped pair
+            channel:
+              type: string
+            interval:
+              type: integer
     DisconnectRequest:
       type: object
       required:
@@ -396,10 +653,7 @@ components:
           type: boolean
         event:
           type: string
-          description: Fired event name (fire-event endpoint only)
-        pushId:
-          type: string
-          description: Scheduled push id (schedule endpoint only)
+          description: Fired event name (fire-event endpoints only)
     ConsumersResponse:
       type: object
       properties:

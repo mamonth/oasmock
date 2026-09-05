@@ -38,6 +38,12 @@ func TestLoadSingleSchema(t *testing.T) {
 			wantKind: KindOpenAPI,
 		},
 		{
+			name:     "control API AsyncAPI YAML",
+			path:     "../../api/asyncapi.yaml",
+			wantErr:  false,
+			wantKind: KindAsyncAPI,
+		},
+		{
 			name:     "valid AsyncAPI 3.0.0 YAML",
 			path:     "../../test/_shared/resources/asyncapi-30.yaml",
 			wantErr:  false,

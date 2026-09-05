@@ -107,7 +107,7 @@ func TestConnectionRegistry_Lifecycle(t *testing.T) {
 	t.Parallel()
 
 	registry := newConnectionRegistry()
-	id := registry.register("/chan", nil)
+	id := registry.register("/chan", "", nil, nil, nil)
 	assert.Equal(t, "/chan", registry.connections("/chan")[0].channel)
 
 	registry.unregister(id)

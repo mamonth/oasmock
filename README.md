@@ -118,7 +118,7 @@ Route calls by body field instead of URL path. See [json-rpc.md](./docs/json-rpc
 
 ## Runtime Expressions
 
-Runtime expressions are enclosed in `{$...}` and resolved at request time. Data sources: `{$request.path.param}`, `{$request.query.param}`, `{$request.header.name}`, `{$request.body.field}`, `{$request.cookie.name}`, `{$state.key}`, `{$env.VARIABLE}`.
+Runtime expressions are enclosed in `{$...}` and resolved at request time. Data sources: `{$request.path.param}`, `{$request.query.param}`, `{$request.header.name}`, `{$request.body.field}`, `{$request.cookie.name}`, `{$state.key}`, `{$env.VARIABLE}`, and for async-driven examples `{$event.name}`/`{$event.data}`/`{$event.<field>}` plus per-connection `{$connection.id}`/`{$connection.channel}`/`{$connection.query.<key>}`/`{$connection.header.<key>}`.
 
 Modifiers: `\|default:value` (fallback), `\|getByPath:path` (traverse nested objects), `\|toJWT` (stub).
 
@@ -126,10 +126,19 @@ Expressions can appear in extension keys, values, and response bodies. Full refe
 
 ## Management API
 
-The server exposes a control HTTP API under the `/_mock` prefix. Full schema: [api/openapi.yaml](./api/openapi.yaml).
+The server exposes a control HTTP API under the `/_mock` prefix. Full schema: [api/openapi.yaml](./api/openapi.yaml). The asynchronous control surface (the management WebSocket stream `/_mock/stream` and its envelopes) is described in [api/asyncapi.yaml](./api/asyncapi.yaml). Both specs are kept in sync with the implementation by contract tests in `internal/server/control_api_spec_sync_test.go`.
 
 - `GET /_mock/requests` — request history (filterable by path, method, time range, pagination)
 - `POST /_mock/examples` — add a dynamic example to an existing route
+  - sync (OpenAPI) targets use `path`; AsyncAPI targets use `channel` with optional `match`/`interval`/`delay` mirroring `x-mock-match`/`x-mock-interval`/`x-mock-delay` for live event-driven or recurring delivery
+- `DELETE /_mock/examples/{exampleId}` — remove a dynamic example and cancel any recurring interval delivery
+- `POST /_mock/events` — fire a named event ad-hoc with a `type` discriminator (`fire` for V1)
+- `POST /_mock/async/push` — push a message to channel consumers (immediate/delayed, targeted/broadcast)
+- `GET /_mock/async/consumers` — list connected consumers (`channel` optional, all channels when omitted)
+- `POST /_mock/async/disconnect` — force-disconnect a consumer
+- `GET /_mock/stream` — management WebSocket stream of runtime notifications (event/push/consumer/schedule envelopes, filtered at connect time)
+
+The legacy `/_mock/ws/*` aliases and `/_mock/events/fire` are deprecated but still work; the removed `/_mock/ws/schedule*` answers `410 Gone` pointing at the examples endpoint.
 
 ## Command‑Line Interface
 

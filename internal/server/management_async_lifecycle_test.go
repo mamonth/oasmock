@@ -15,12 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newAsyncMgmtServer builds a server with control API enabled and one ws channel.
-func newAsyncMgmtServer(t *testing.T) *Server {
-	t.Helper()
-	return newPushServer(t)
-}
-
 /*
 Scenario: Templated push payloads evaluate against schema state
 Given a push request whose payload uses the schema's state namespace
@@ -42,7 +36,7 @@ func TestPushEndpoint_TemplatedPayload(t *testing.T) {
 	_, _, _ = conn.ReadMessage() // consume snapshot
 
 	body := `{"channel":"/alerts","payload":{"msg":"{$env.OASMOCK_TEST_VAL}"}}`
-	resp, err := http.Post(ts.URL+"/_mock/ws/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -68,21 +62,21 @@ func TestPushEndpoint_UnresolvableExpression(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 	body := `{"channel":"/alerts","payload":{"msg":"{$event.nonexistent}"}}`
-	resp, err := http.Post(ts.URL+"/_mock/ws/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 /*
-Scenario: Scheduling a recurring push delivers at the interval
-Given a schedule request with an interval
-When the schedule is created and the server runs
-Then the message is delivered repeatedly until stopped
+Scenario: Removed schedule endpoint answers 410 Gone
+Given a management schedule request against the removed /_mock/ws/schedule path
+When the schedule endpoint is invoked
+Then the server responds 410 Gone pointing at POST /_mock/examples
 
-Related spec scenarios: RS.AMG.12, RS.AMG.13
+Related spec scenarios: RS.AMG.12
 */
-func TestSchedulePush_Recurring(t *testing.T) {
+func TestSchedulePush_Removed(t *testing.T) {
 	t.Parallel()
 
 	srv := newAsyncMgmtServer(t)
@@ -98,26 +92,7 @@ func TestSchedulePush_Recurring(t *testing.T) {
 	resp, err := http.Post(ts.URL+"/_mock/ws/schedule", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var scheduleResp map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&scheduleResp))
-	pushID, ok := scheduleResp["pushId"].(string)
-	require.True(t, ok)
-
-	// First recurring delivery.
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	_, msg, err := conn.ReadMessage()
-	require.NoError(t, err)
-	assert.Contains(t, string(msg), `"tick":true`)
-
-	// Stop the schedule.
-	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/_mock/ws/schedule/"+pushID, nil)
-	require.NoError(t, err)
-	stopResp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer stopResp.Body.Close() //nolint:errcheck
-	assert.Equal(t, http.StatusOK, stopResp.StatusCode)
+	assert.Equal(t, http.StatusGone, resp.StatusCode)
 }
 
 /*
@@ -138,9 +113,11 @@ func TestDisconnectEndpoint(t *testing.T) {
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err)
 	defer conn.Close() //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, _, _ = conn.ReadMessage() // consume snapshot
 
 	// Identify the connection id via consumers.
-	resp, err := http.Get(ts.URL + "/_mock/ws/consumers?channel=/alerts")
+	resp, err := http.Get(ts.URL + "/_mock/async/consumers?channel=/alerts")
 	require.NoError(t, err)
 	var payload map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&payload))
@@ -155,13 +132,19 @@ func TestDisconnectEndpoint(t *testing.T) {
 
 	// Disconnect it.
 	disc := `{"connectionId":"` + connID + `","reason":"busy","code":4001}`
-	discResp, err := http.Post(ts.URL+"/_mock/ws/disconnect", "application/json", strings.NewReader(disc))
+	discResp, err := http.Post(ts.URL+"/_mock/async/disconnect", "application/json", strings.NewReader(disc))
 	require.NoError(t, err)
 	defer discResp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, discResp.StatusCode)
 
+	// The disconnect must actually close the socket: a read on the consumer
+	// observes the close handshake (RS.AMG.15).
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, _, readErr := conn.ReadMessage()
+	require.Error(t, readErr, "expected the connection to close after the disconnect")
+
 	// Unknown consumer 404.
-	unknownResp, err := http.Post(ts.URL+"/_mock/ws/disconnect", "application/json", strings.NewReader(`{"connectionId":"nope"}`))
+	unknownResp, err := http.Post(ts.URL+"/_mock/async/disconnect", "application/json", strings.NewReader(`{"connectionId":"nope"}`))
 	require.NoError(t, err)
 	defer unknownResp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusNotFound, unknownResp.StatusCode)
@@ -188,14 +171,14 @@ func TestAsyncManagement_LiveConnections(t *testing.T) {
 	_, _, _ = conn.ReadMessage() // snapshot
 
 	// Fire an event (accepted, possibly no matching subscriber on /alerts).
-	evResp, err := http.Post(ts.URL+"/_mock/events/fire", "application/json",
-		strings.NewReader(`{"event":"any","payload":{"x":1}}`))
+	evResp, err := http.Post(ts.URL+"/_mock/events", "application/json",
+		strings.NewReader(`{"type":"fire","event":"any","payload":{"x":1}}`))
 	require.NoError(t, err)
 	_ = evResp.Body.Close()
 	assert.Equal(t, http.StatusOK, evResp.StatusCode)
 
 	// Push a message to the connected consumer.
-	pushResp, err := http.Post(ts.URL+"/_mock/ws/push", "application/json",
+	pushResp, err := http.Post(ts.URL+"/_mock/async/push", "application/json",
 		strings.NewReader(`{"channel":"/alerts","payload":{"seq":1}}`))
 	require.NoError(t, err)
 	_ = pushResp.Body.Close()
@@ -270,7 +253,7 @@ func TestPushEndpoint_TargetedWS(t *testing.T) {
 
 	// The registry hands out sequential ids (conn-1, conn-2) in dial order.
 	body := `{"channel":"/alerts","connectionId":"conn-1","payload":{"targeted":true}}`
-	post, err := http.Post(ts.URL+"/_mock/ws/push", "application/json", strings.NewReader(body))
+	post, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer post.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, post.StatusCode)
@@ -332,7 +315,7 @@ func TestPushEndpoint_TargetedSignalR(t *testing.T) {
 	require.NotEmpty(t, streamConnID)
 
 	body := `{"channel":"/priceFeed","connectionId":"` + streamConnID + `","payload":{"seq":1}}`
-	post, err := http.Post(ts.URL+"/_mock/ws/push", "application/json", strings.NewReader(body))
+	post, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer post.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, post.StatusCode)
@@ -373,7 +356,7 @@ func TestDisconnectEndpoint_Abrupt(t *testing.T) {
 	_, _, _ = conn.ReadMessage() // consume snapshot
 
 	// Identify the connection id via consumers.
-	resp, err := http.Get(ts.URL + "/_mock/ws/consumers?channel=/alerts")
+	resp, err := http.Get(ts.URL + "/_mock/async/consumers?channel=/alerts")
 	require.NoError(t, err)
 	var payload map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&payload))
@@ -387,7 +370,7 @@ func TestDisconnectEndpoint_Abrupt(t *testing.T) {
 	require.True(t, ok)
 
 	disc := `{"connectionId":"` + connID + `","abrupt":true}`
-	discResp, err := http.Post(ts.URL+"/_mock/ws/disconnect", "application/json", strings.NewReader(disc))
+	discResp, err := http.Post(ts.URL+"/_mock/async/disconnect", "application/json", strings.NewReader(disc))
 	require.NoError(t, err)
 	defer discResp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, discResp.StatusCode)

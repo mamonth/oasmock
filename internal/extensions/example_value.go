@@ -1,7 +1,9 @@
 package extensions
 
 import (
+	"encoding/json"
 	"log/slog"
+	"math"
 
 	"github.com/getkin/kin-openapi/openapi3"
 )
@@ -140,6 +142,75 @@ func ValueHeaders(ev ExampleValue) (map[string]any, bool) {
 	}
 	h := ev.Headers()
 	return h, h != nil
+}
+
+// ValueInterval parses the x-mock-interval timing extension (positive
+// millisecond cadence marking a periodically driven example, RS.EXT.22).
+// Absent, zero, negative or non-numeric values report "not present".
+func ValueInterval(ev ExampleValue) (int, bool) {
+	ms, ok := asPositiveMs(ev, "x-mock-interval")
+	if !ok || ms <= 0 {
+		return 0, false
+	}
+	return ms, true
+}
+
+// ValueDelay parses the x-mock-delay timing extension (integer millisecond
+// delay before emission, defaulting to zero when absent, RS.EXT.23). A
+// declared but non-integer value reports "not present" and is rejected as a
+// load error by the classifier.
+func ValueDelay(ev ExampleValue) (int, bool) {
+	if ev == nil {
+		return 0, false
+	}
+	v, ok := ev.Get("x-mock-delay")
+	if !ok {
+		return 0, false
+	}
+	ms, ok := AsMilliseconds(v)
+	return ms, ok
+}
+
+// asPositiveMs extracts a numeric millisecond extension that must be positive.
+func asPositiveMs(ev ExampleValue, key string) (int, bool) {
+	if ev == nil {
+		return 0, false
+	}
+	v, ok := ev.Get(key)
+	if !ok {
+		return 0, false
+	}
+	return AsMilliseconds(v)
+}
+
+// AsMilliseconds converts a JSON number to an integer millisecond value. A
+// fractional number is rejected rather than truncated, so every caller treats
+// a value like 2.5ms as an error (RS.EXT.22-23).
+func AsMilliseconds(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		if n != math.Trunc(n) {
+			return 0, false
+		}
+		return int(n), true
+	case float32:
+		if float64(n) != math.Trunc(float64(n)) {
+			return 0, false
+		}
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(i), true
+	default:
+		return 0, false
+	}
 }
 
 func asMap(ev ExampleValue, key string) (map[string]any, bool) {

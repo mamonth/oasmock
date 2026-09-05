@@ -184,9 +184,6 @@ type MessageRenderer interface {
 	// RenderMessageSpecs renders the first selectable example across the given
 	// message specs.
 	RenderMessageSpecs(messages []*loader.MessageSpec, prefix, opID string, in InboundMessage) (int, []byte, error)
-	// RenderMessageSpecsWithEvent renders message specs with an {$event.*} data
-	// source.
-	RenderMessageSpecsWithEvent(messages []*loader.MessageSpec, prefix, opID string, payload map[string]any) (int, []byte, error)
 	// RenderAsyncPayload evaluates runtime expressions in an example payload.
 	RenderAsyncPayload(example *MessageExampleView, evaluator runtime.Evaluator) ([]byte, error)
 	// ApplySetState applies x-mock-set-state against a schema namespace.
@@ -197,8 +194,20 @@ type MessageRenderer interface {
 	NewEnvSource() *runtime.EnvSource
 }
 
+// ConsumerInfo is a delivery candidate: a raw ws consumer or a SignalR
+// connection with open streams, carrying the connection context captured at
+// upgrade for {$connection.*} evaluation.
+type ConsumerInfo struct {
+	ConnectionID string
+	Channel      string
+	Query        map[string][]string
+	Headers      map[string][]string
+	Streams      []map[string]string
+}
+
 // ConsumerBus emits rendered payloads to channel consumers (SignalR open
-// streams and/or raw ws broadcast). hubManager implements it.
+// streams and/or raw ws broadcast) and enumerates delivery candidates for
+// per-connection recipient partitioning. hubManager implements it.
 type ConsumerBus interface {
 	// SignalRPush emits a payload into a SignalR hub channel's open streams or
 	// as a server invocation when none are open (RS.SHR.18-19).
@@ -206,4 +215,10 @@ type ConsumerBus interface {
 	// WSBroadcast sends a payload to every connected raw ws consumer of a
 	// channel address.
 	WSBroadcast(address string, payload []byte)
+	// Candidates returns every consumer of a channel address (raw ws and
+	// SignalR) with the connection context captured at upgrade.
+	Candidates(address string) []ConsumerInfo
+	// PushTo delivers a payload to one candidate consumer (its open streams,
+	// falling back to a server invocation on the same connection).
+	PushTo(consumer ConsumerInfo, address string, payload []byte)
 }

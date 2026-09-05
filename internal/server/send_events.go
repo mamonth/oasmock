@@ -2,6 +2,8 @@ package server
 
 import (
 	"fmt"
+
+	"github.com/mamonth/oasmock/internal/extensions"
 )
 
 // xSendEventsKey is the extension key carrying event subscriptions on an
@@ -39,7 +41,7 @@ func parseSendEvents(ext map[string]any) ([]SendEvent, error) {
 				return nil, fmt.Errorf("x-send-events entry must have an 'on' field")
 			}
 			ev := SendEvent{On: on}
-			if wait, ok := asInt(v["wait"]); ok {
+			if wait, ok := extensions.AsMilliseconds(v["wait"]); ok {
 				ev.Wait = wait
 			}
 			out = append(out, ev)
@@ -48,17 +50,4 @@ func parseSendEvents(ext map[string]any) ([]SendEvent, error) {
 		}
 	}
 	return out, nil
-}
-
-// asInt converts a JSON number to an int.
-func asInt(v any) (int, bool) {
-	switch n := v.(type) {
-	case float64:
-		return int(n), true
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	}
-	return 0, false
 }

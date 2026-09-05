@@ -158,19 +158,81 @@ func (s *StateSource) Get(path string) (any, bool) {
 	return getNested(val, parts[1:])
 }
 
+// ConnectionSource provides access to a consumer connection's context via
+// {$connection.*} for per-connection recipient matching (RS.EXT.27). Metadata
+// is captured at upgrade time.
+type ConnectionSource struct {
+	ID      string
+	Channel string
+	Query   map[string][]string
+	Headers map[string][]string
+}
+
+func (c *ConnectionSource) Get(path string) (any, bool) {
+	parts := splitEscapedPath(path)
+	if len(parts) == 0 {
+		return nil, false
+	}
+	switch parts[0] {
+	case "id":
+		if c.ID == "" {
+			return nil, false
+		}
+		return c.ID, true
+	case "channel":
+		if c.Channel == "" {
+			return nil, false
+		}
+		return c.Channel, true
+	case "query":
+		return multiValueLookup(c.Query, parts[1:])
+	case "header":
+		return multiValueLookup(c.Headers, parts[1:])
+	}
+	return nil, false
+}
+
+// multiValueLookup returns a single value when a key has one entry, the
+// full slice when it has several, and false when the key or category is
+// absent.
+func multiValueLookup(m map[string][]string, keys []string) (any, bool) {
+	if len(keys) != 1 {
+		return nil, false
+	}
+	vals, ok := m[keys[0]]
+	if !ok || len(vals) == 0 {
+		return nil, false
+	}
+	if len(vals) == 1 {
+		return vals[0], true
+	}
+	return vals, true
+}
+
 // EnvSource provides access to environment variables.
 type EnvSource struct {
 	Env map[string]string
 }
 
 // EventSource provides access to the payload of the currently fired event via
-// {$event.*} (design D8).
+// {$event.*} (design D8). Name is the event identity (named-event name or
+// built-in kind); Data is the event payload. name and data are reserved
+// accessor names: {$event.name} returns the identity, {$event.data} the whole
+// payload, and any other path resolves within the payload fields.
 type EventSource struct {
+	Name string
 	Data map[string]any
 }
 
 func (e *EventSource) Get(path string) (any, bool) {
-	return getMapNested(e.Data, path)
+	switch path {
+	case "name":
+		return e.Name, e.Name != ""
+	case "data":
+		return e.Data, e.Data != nil
+	default:
+		return getMapNested(e.Data, path)
+	}
 }
 
 // MessageSource provides access to an AsyncAPI message via {$message.*}

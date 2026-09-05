@@ -9,50 +9,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/mamonth/oasmock/internal/asyncapi"
-	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-const pushChannelDoc = `asyncapi: 3.0.0
-info:
-  title: Alerts
-  version: 1.0.0
-channels:
-  alerts:
-    address: /alerts
-    bindings:
-      ws:
-        method: GET
-    messages:
-      alertMsg:
-        examples:
-          - name: ex1
-            payload:
-              level: info
-              msg: default
-operations:
-  receiveAlerts:
-    action: receive
-    channel:
-      $ref: '#/channels/alerts'
-`
-
-func newPushServer(t *testing.T) *Server {
-	t.Helper()
-	schemas := []loader.SchemaInfo{{Kind: loader.KindAsyncAPI, Async: parsePushDoc(t), Prefix: ""}}
-	srv, err := New(Config{HistorySize: DefaultHistorySize, EnableControlAPI: true}, schemas)
-	require.NoError(t, err)
-	return srv
-}
-
-func parsePushDoc(t *testing.T) *asyncapi.Document {
-	t.Helper()
-	doc, err := asyncapi.Parse([]byte(pushChannelDoc))
-	require.NoError(t, err)
-	return doc
-}
 
 /*
 Scenario: Pushing a message to channel consumers immediately
@@ -80,7 +39,7 @@ func TestPushEndpoint_Immediate(t *testing.T) {
 	require.NoError(t, err)
 
 	body := `{"channel":"/alerts","payload":{"msg":"hello"}}`
-	resp, err := http.Post(ts.URL+"/_mock/ws/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -107,7 +66,7 @@ func TestPushEndpoint_NegativeDelay(t *testing.T) {
 	defer ts.Close()
 
 	body := `{"channel":"/alerts","payload":{},"delay":-10}`
-	resp, err := http.Post(ts.URL+"/_mock/ws/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -129,7 +88,7 @@ func TestPushEndpoint_NoConsumers(t *testing.T) {
 	defer ts.Close()
 
 	body := `{"channel":"/alerts","payload":{"msg":"none"}}`
-	resp, err := http.Post(ts.URL+"/_mock/ws/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -151,7 +110,7 @@ func TestPushEndpoint_UnknownConsumer(t *testing.T) {
 	defer ts.Close()
 
 	body := `{"channel":"/alerts","payload":{},"connectionId":"missing"}`
-	resp, err := http.Post(ts.URL+"/_mock/ws/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
@@ -177,7 +136,7 @@ func TestConsumersEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close() //nolint:errcheck
 
-	resp, err := http.Get(ts.URL + "/_mock/ws/consumers?channel=/alerts")
+	resp, err := http.Get(ts.URL + "/_mock/async/consumers?channel=/alerts")
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
