@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/mamonth/oasmock/internal/asyncapi"
 	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/mamonth/oasmock/internal/runtime"
 	"github.com/stretchr/testify/assert"
@@ -25,11 +26,11 @@ Related spec scenarios: RS.ASP.1, RS.ASP.10
 func TestHTTPProtocolAdapter_RendersMessage(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
 
 	mapping := &RouteMapping{
-		Protocol: asyncHTTPProtocol,
+		Protocol: asyncapi.ProtocolHTTP,
 		Method:   http.MethodPost,
 		Prefix:   "",
 		Pattern:  "/employees",
@@ -43,7 +44,7 @@ func TestHTTPProtocolAdapter_RendersMessage(t *testing.T) {
 		},
 	}
 
-	adapter := srv.adapterForProtocol(asyncHTTPProtocol)
+	adapter := srv.adapterForProtocol(asyncapi.ProtocolHTTP)
 	require.NotNil(t, adapter)
 
 	mh := srv.asyncMessageHandler(mapping)
@@ -72,17 +73,17 @@ Related spec scenarios: RS.ASP.10
 func TestHTTPProtocolAdapter_SendNoReply(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
 
 	mapping := &RouteMapping{
-		Protocol: asyncHTTPProtocol,
+		Protocol: asyncapi.ProtocolHTTP,
 		Method:   http.MethodPost,
 		Pattern:  "/events",
 		Messages: nil,
 	}
 
-	adapter := srv.adapterForProtocol(asyncHTTPProtocol)
+	adapter := srv.adapterForProtocol(asyncapi.ProtocolHTTP)
 	require.NotNil(t, adapter)
 
 	handler := adapter.Handler(mapping, srv.asyncMessageHandler(mapping))
@@ -113,7 +114,7 @@ func TestSelectAsyncExample_Skip(t *testing.T) {
 			{Name: "active", Payload: map[string]any{"id": 2}},
 		},
 	}
-	srv, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 
 	view, key := srv.selectAsyncExample(message, runtime.NewEvaluator(), "op")
 	require.NotNil(t, view)
@@ -141,7 +142,7 @@ func TestSelectAsyncExample_FirstNoConditions(t *testing.T) {
 			{Name: "second", Payload: map[string]any{"id": 2}},
 		},
 	}
-	srv, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 
 	view, key := srv.selectAsyncExample(message, runtime.NewEvaluator(), "op")
 	require.NotNil(t, view)
@@ -168,7 +169,7 @@ func TestSelectAsyncExample_Once(t *testing.T) {
 			{Name: "once", Extensions: map[string]any{"x-mock-once": true}, Payload: map[string]any{"id": 1}},
 		},
 	}
-	srv, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 
 	view, key := srv.selectAsyncExample(message, runtime.NewEvaluator(), "op")
 	require.NotNil(t, view)
@@ -189,7 +190,7 @@ Related spec scenarios: RS.ASP.4
 func TestBuildRouteHandler_UnsupportedProtocol(t *testing.T) {
 	t.Parallel()
 
-	srv, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 
 	mapping := &RouteMapping{
 		Protocol: "amqp",
@@ -211,11 +212,11 @@ Then it returns a non-nil handler
 func TestBuildRouteHandler_WSAssignsAdapter(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
 
 	mapping := &RouteMapping{
-		Protocol: asyncWSProtocol,
+		Protocol: asyncapi.ProtocolWS,
 		Method:   http.MethodGet,
 		Pattern:  "/socket",
 	}

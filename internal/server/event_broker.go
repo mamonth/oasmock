@@ -48,6 +48,9 @@ type eventBroker struct {
 	mu      sync.RWMutex
 	byEvent map[string][]channelSubscription // identity -> subscriptions
 	deliver eventDeliverer
+	// done is closed on shutdown so pending delayed fires no longer deliver.
+	done    chan struct{}
+	stopOne sync.Once
 }
 
 // newEventBroker creates an empty broker. When deliver is nil, fired events
@@ -56,7 +59,16 @@ func newEventBroker(deliver eventDeliverer) *eventBroker {
 	return &eventBroker{
 		byEvent: make(map[string][]channelSubscription),
 		deliver: deliver,
+		done:    make(chan struct{}),
 	}
+}
+
+// stop cancels any pending delayed deliveries.
+func (b *eventBroker) stop() {
+	if b == nil {
+		return
+	}
+	b.stopOne.Do(func() { close(b.done) })
 }
 
 // sanitizeIdentity maps a subscription identity to a broker key. An empty
@@ -171,7 +183,11 @@ func (b *eventBroker) fire(event string, payload map[string]any, firingSchema st
 	}
 	if delay != nil && delay.ms > 0 {
 		go func() {
-			time.Sleep(time.Duration(delay.ms) * time.Millisecond)
+			select {
+			case <-b.done:
+				return
+			case <-time.After(time.Duration(delay.ms) * time.Millisecond):
+			}
 			b.deliverAll(subs, payload)
 		}()
 		return

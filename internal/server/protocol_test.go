@@ -15,7 +15,7 @@ func newTestRecorder() *httptest.ResponseRecorder {
 }
 
 func newTestRequest() *http.Request {
-	return httptest.NewRequest("GET", "/", nil)
+	return httptest.NewRequest(http.MethodGet, "/", nil)
 }
 
 /*
@@ -29,7 +29,7 @@ Related spec scenarios: RS.ASP.1, RS.ASP.2, RS.ASP.4
 func TestServer_ProtocolAdaptersRegistered(t *testing.T) {
 	t.Parallel()
 
-	srv, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 
 	httpAdapter := srv.adapterForProtocol("http")
 	require.NotNil(t, httpAdapter)
@@ -53,7 +53,7 @@ Related spec scenarios: RS.ASP.4
 func TestServer_NoAdapterForUnsupportedProtocol(t *testing.T) {
 	t.Parallel()
 
-	srv, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 
 	assert.Nil(t, srv.adapterForProtocol("amqp"))
 	assert.Nil(t, srv.adapterForProtocol("kafka"))

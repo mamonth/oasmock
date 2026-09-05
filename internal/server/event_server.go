@@ -2,15 +2,14 @@ package server
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/mamonth/oasmock/internal/asyncapi"
 	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/loader"
-	"github.com/mamonth/oasmock/internal/runtime"
 )
 
 // eventBus is the pure-fabrication coordinator behind the event driver
@@ -29,6 +28,21 @@ type eventBus struct {
 	// observer, when set, is invoked with every emitted envelope so the
 	// management stream can mirror fired events and deliveries (RS.AMG.24-25).
 	observer func(env manageEnvelope)
+	// done is closed on shutdown so pending delayed emissions no longer run.
+	done    chan struct{}
+	stopOne sync.Once
+}
+
+// doneChannel returns the bus shutdown signal so callers that schedule work on
+// their own goroutines (e.g. delayed management pushes) can cancel it when the
+// bus shuts down.
+func (b *eventBus) doneChannel() <-chan struct{} {
+	if b == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return b.done
 }
 
 // setObserver installs the management-stream observer.
@@ -45,10 +59,12 @@ func newEventBus(renderer MessageRenderer, bus ConsumerBus, verbose bool) *event
 		scheduler: newJobScheduler(),
 		verbose:   verbose,
 		wait:      time.Sleep,
+		done:      make(chan struct{}),
 	}
 	b.broker = &eventBroker{
 		byEvent: make(map[string][]channelSubscription),
 		deliver: b.deliver,
+		done:    make(chan struct{}),
 	}
 	return b
 }
@@ -94,12 +110,15 @@ func (b *eventBus) hasSubscribers(name, schema string) bool {
 	return b.broker != nil && b.broker.hasSubscribers(name, schema)
 }
 
-// shutdown cancels all periodic interval jobs.
+// shutdown cancels all periodic interval jobs and cancels pending delayed
+// emissions so no delivery happens after shutdown.
 func (b *eventBus) shutdown() {
 	if b == nil || b.scheduler == nil {
 		return
 	}
 	b.scheduler.shutdown()
+	b.stopOne.Do(func() { close(b.done) })
+	b.broker.stop()
 }
 
 // registerEventSubscriptions scans AsyncAPI schemas, classifies each message
@@ -136,44 +155,8 @@ func (b *eventBus) registerSchema(prefix string, doc *asyncapi.Document) error {
 		address := asyncAddressWithPrefix(prefix, ch.Address)
 		for _, msg := range ch.Messages {
 			for _, ex := range msg.Examples {
-				if ex == nil {
-					continue
-				}
-				derived, err := b.derivedExamples(ex)
-				if err != nil {
+				if err := b.classifyMessageExample(ch.ID, msg.Name, address, prefix, ex, &subs, &periodic); err != nil {
 					return err
-				}
-				for _, spec := range derived {
-					trig, err := extensions.ClassifyTrigger(&MessageExampleView{spec: spec})
-					if err != nil {
-						return fmt.Errorf("channel %q example %q: %w", ch.ID, ex.Name, err)
-					}
-					switch trig.Kind {
-					case extensions.TriggerEvent:
-						subs = append(subs, channelSubscription{
-							address: address,
-							event:   trig.Identity,
-							delay:   trig.Delay,
-							messages: []*messageDeliverable{{
-								spec:   &loader.MessageSpec{Name: msg.Name, Examples: []*loader.MessageExampleSpec{spec}},
-								prefix: prefix,
-							}},
-						})
-					case extensions.TriggerPeriodic:
-						periodic = append(periodic, periodicRegistration{
-							address: address, prefix: prefix, exampleID: ex.Name, spec: spec, interval: trig.Interval,
-						})
-					case extensions.TriggerReply:
-						// Reply examples are served by the channel's normal
-						// reply path; nothing to register here. A match that
-						// still references {$connection.*} can never evaluate
-						// (no connection context in the reply path), so point it
-						// out in verbose mode instead of failing silently.
-						if b.verbose && extensions.MatchReferencesConnection(trig.Match) {
-							slog.Warn("reply example references {$connection.*} which never matches without an event context; remove the connection condition or make the example event-driven",
-								"channel", ch.ID, "example", ex.Name)
-						}
-					}
 				}
 			}
 		}
@@ -184,6 +167,53 @@ func (b *eventBus) registerSchema(prefix string, doc *asyncapi.Document) error {
 	for _, p := range periodic {
 		if _, err := b.registerPeriodic(p.address, p.prefix, p.exampleID, p.spec, p.interval); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// classifyMessageExample classifies one spec example (and its legacy
+// x-send-events derivations) into an event subscription, a periodic
+// registration, or nothing (a plain reply), appending to the commit-stage
+// accumulators.
+func (b *eventBus) classifyMessageExample(channelID, msgName, address, prefix string, ex *asyncapi.Example, subs *[]channelSubscription, periodic *[]periodicRegistration) error {
+	if ex == nil {
+		return nil
+	}
+	derived, err := b.derivedExamples(ex)
+	if err != nil {
+		return err
+	}
+	for _, spec := range derived {
+		trig, err := extensions.ClassifyTrigger(&MessageExampleView{spec: spec})
+		if err != nil {
+			return fmt.Errorf("channel %q example %q: %w", channelID, ex.Name, err)
+		}
+		switch trig.Kind {
+		case extensions.TriggerEvent:
+			*subs = append(*subs, channelSubscription{
+				address: address,
+				event:   trig.Identity,
+				delay:   trig.Delay,
+				messages: []*messageDeliverable{{
+					spec:   &loader.MessageSpec{Name: msgName, Examples: []*loader.MessageExampleSpec{spec}},
+					prefix: prefix,
+				}},
+			})
+		case extensions.TriggerPeriodic:
+			*periodic = append(*periodic, periodicRegistration{
+				address: address, prefix: prefix, exampleID: ex.Name, spec: spec, interval: trig.Interval,
+			})
+		case extensions.TriggerReply:
+			// Reply examples are served by the channel's normal reply path;
+			// nothing to register here. A match that still references
+			// {$connection.*} can never evaluate (no connection context in the
+			// reply path), so point it out in verbose mode instead of failing
+			// silently.
+			if b.verbose && extensions.MatchReferencesConnection(trig.Match) {
+				slog.Warn("reply example references {$connection.*} which never matches without an event context; remove the connection condition or make the example event-driven",
+					"channel", channelID, "example", ex.Name)
+			}
 		}
 	}
 	return nil
@@ -337,8 +367,13 @@ func (b *eventBus) derivedExamples(ex *asyncapi.Example) ([]*loader.MessageExamp
 			if b.verbose {
 				slog.Warn("x-send-events is deprecated; use x-mock-match: {'{$event.name}': <name>}", "example", ex.Name)
 			}
-			match, _ := ext["x-mock-match"].(map[string]any)
-			if match == nil {
+			match, ok := ext["x-mock-match"].(map[string]any)
+			if !ok {
+				// A pre-existing, non-object x-mock-match would be silently lost
+				// if overwritten; fail loud so the spec author fixes it.
+				if _, present := ext["x-mock-match"]; present {
+					return nil, fmt.Errorf("example %q: x-mock-match must be an object when combined with x-send-events", ex.Name)
+				}
 				match = make(map[string]any)
 			}
 			match["{$event.name}"] = ev.On
@@ -359,10 +394,20 @@ func (b *eventBus) derivedExamples(ex *asyncapi.Example) ([]*loader.MessageExamp
 	return out, nil
 }
 
-// cloneExtensions deep-copies an example's extension map.
+// cloneExtensions deep-copies an example's extension map. Nested maps (e.g.
+// x-mock-match) are copied too, so a legacy example with several x-send-events
+// entries never shares the match map across the derived clones.
 func cloneExtensions(ext map[string]any) map[string]any {
 	out := make(map[string]any, len(ext))
 	for k, v := range ext {
+		if m, ok := v.(map[string]any); ok {
+			inner := make(map[string]any, len(m))
+			for ik, iv := range m {
+				inner[ik] = iv
+			}
+			out[k] = inner
+			continue
+		}
 		out[k] = v
 	}
 	return out
@@ -373,171 +418,3 @@ func cloneExtensions(ext map[string]any) map[string]any {
 // example's match references {$connection.*} (design D6, RS.EXT.24-25). An
 // example-level x-mock-delay schedules the emission that far after the fire
 // (RS.EXT.23).
-func (b *eventBus) deliver(sub channelSubscription, payload map[string]any) {
-	b.deliverTo(sub, payload, nil)
-}
-
-// deliverTargeted delivers a built-in event to a single candidate connection.
-// The connection bucket (if any) is evaluated against that one recipient only;
-// with no connection conditions the message is pushed to the recipient alone
-// (RS.EVT.24, RS.EXT.26).
-func (b *eventBus) deliverTargeted(sub channelSubscription, payload map[string]any, recipient ConsumerInfo) {
-	b.deliverTo(sub, payload, &recipient)
-}
-
-// deliverTo runs the shared delayed-emission + delivery pipeline for a
-// subscription. When target is non-nil, delivery is restricted to that single
-// candidate (built-in connect recipient).
-func (b *eventBus) deliverTo(sub channelSubscription, payload map[string]any, target *ConsumerInfo) {
-	if len(sub.messages) == 0 {
-		return
-	}
-	if sub.delay > 0 {
-		ms := sub.delay
-		sub.delay = 0
-		go func() {
-			b.wait(time.Duration(ms) * time.Millisecond)
-			b.deliverTo(sub, payload, target)
-		}()
-		return
-	}
-	deliverable := sub.messages[0]
-	addr := sub.address
-	prefix := deliverable.prefix
-	eventName := sub.event
-	opID := "event:" + cmp.Or(eventName, anyEventIdentity) + ":" + addr
-
-	b.deliverExample(sub, deliverable.spec.Examples, addr, prefix, eventName, payload, opID, target)
-}
-
-// stateEnvEvaluator wires the fixed state and environment sources shared by
-// every emission path (periodic deliveries have no event/connection context).
-func (b *eventBus) stateEnvEvaluator(prefix string) runtime.Evaluator {
-	eval := runtime.NewEvaluator()
-	eval.AddSource("state", b.renderer.NewStateSource(prefix))
-	eval.AddSource("env", b.renderer.NewEnvSource())
-	return eval
-}
-
-// eventEvaluator wires the fixed emission sources (state, env, event) plus an
-// optional per-connection source into a fresh evaluator.
-func (b *eventBus) eventEvaluator(state, env runtime.DataSource, eventName string, payload map[string]any, connection *runtime.ConnectionSource) runtime.Evaluator {
-	eval := runtime.NewEvaluator()
-	eval.AddSource("state", state)
-	eval.AddSource("env", env)
-	eval.AddSource("event", &runtime.EventSource{Name: eventName, Data: payload})
-	if connection != nil {
-		eval.AddSource("connection", connection)
-	}
-	return eval
-}
-
-// renderExample renders a single example's payload against an evaluator,
-// honoring x-mock-skip and x-mock-set-state. It returns the rendered body, or
-// nil when the example is skipped or rendering fails (verbose-logged).
-func (b *eventBus) renderExample(view *MessageExampleView, eval runtime.Evaluator, prefix, opID string) []byte {
-	if extensions.ValueSkip(view) {
-		return nil
-	}
-	if stateMap, ok := extensions.ValueSetState(view); ok {
-		b.renderer.ApplySetState(stateMap, eval, prefix)
-	}
-	body, err := b.renderer.RenderAsyncPayload(view, eval)
-	if err != nil {
-		if b.verbose {
-			slog.Debug("Example delivery render failed", "opID", opID, "err", err)
-		}
-		return nil
-	}
-	return body
-}
-
-// evaluateConnectionBucket evaluates an example's connection conditions
-// against one candidate recipient. An empty bucket matches every candidate.
-func (b *eventBus) evaluateConnectionBucket(bucket extensions.ParamsMatch, state, env runtime.DataSource, eventName string, payload map[string]any, candidate ConsumerInfo) (bool, error) {
-	if len(bucket) == 0 {
-		return true, nil
-	}
-	eval := b.eventEvaluator(state, env, eventName, payload, connectionSourceFromInfo(candidate))
-	return extensions.EvaluateParamsMatch(bucket, eval)
-}
-
-// deliverExample runs the shared selection + render + recipient-partition
-// pipeline for one subscription's examples. When target is non-nil, delivery
-// is restricted to that single candidate (built-in connect recipient).
-func (b *eventBus) deliverExample(sub channelSubscription, examples []*loader.MessageExampleSpec, addr, prefix, eventName string, payload map[string]any, opID string, target *ConsumerInfo) {
-	// Fixed (non-connection) sources evaluated once per emission.
-	state := b.renderer.NewStateSource(prefix)
-	env := b.renderer.NewEnvSource()
-
-	for _, example := range examples {
-		view := &MessageExampleView{spec: example}
-		common, connection := b.partitionedMatch(view)
-		var connSource *runtime.ConnectionSource
-		if target != nil {
-			connSource = connectionSourceFromInfo(*target)
-		}
-		evaluator := b.eventEvaluator(state, env, eventName, payload, connSource)
-		if len(common) > 0 {
-			ok, cErr := extensions.EvaluateParamsMatch(common, evaluator)
-			if cErr != nil || !ok {
-				continue
-			}
-		}
-		body := b.renderExample(view, evaluator, prefix, opID)
-		if body == nil {
-			continue
-		}
-		if target != nil {
-			// Built-in recipient: evaluate the connection bucket against the
-			// single candidate and deliver on match (or immediately when there
-			// is no connection bucket).
-			ok, okErr := b.evaluateConnectionBucket(connection, state, env, eventName, payload, *target)
-			if okErr != nil || !ok {
-				continue
-			}
-			b.notifyPush(addr, target.ConnectionID, body)
-			b.bus.PushTo(*target, addr, body)
-			continue
-		}
-		if len(connection) == 0 {
-			// Broadcast fast path (RS.EXT.25).
-			b.notifyPush(addr, "", body)
-			b.bus.SignalRPush(addr, body)
-			b.bus.WSBroadcast(addr, body)
-			continue
-		}
-		// Per-connection partition: evaluate the connection bucket against each
-		// candidate with its connection context (design D6).
-		for _, candidate := range b.bus.Candidates(addr) {
-			ok, okErr := b.evaluateConnectionBucket(connection, state, env, eventName, payload, candidate)
-			if okErr != nil || !ok {
-				continue
-			}
-			b.notifyPush(addr, candidate.ConnectionID, body)
-			b.bus.PushTo(candidate, addr, body)
-		}
-	}
-}
-
-// notifyPush emits a push envelope to the management observer (RS.AMG.25).
-func (b *eventBus) notifyPush(channel, connectionID string, body []byte) {
-	if b.observer == nil {
-		return
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		payload = map[string]any{"raw": string(body)}
-	}
-	env := manageEnvelope{Type: "push"}
-	env.Push = &managePushEnvelope{Channel: channel, ConnectionID: connectionID, Payload: payload}
-	b.observer(env)
-}
-
-// partitionedMatch splits an example's x-mock-match into common conditions
-// (evaluated once per emission) and connection conditions (evaluated per
-// candidate recipient). A nil/absent match yields empty buckets.
-func (b *eventBus) partitionedMatch(view *MessageExampleView) (extensions.ParamsMatch, extensions.ParamsMatch) {
-	match, _ := extensions.ValueMatch(view)
-	return extensions.PartitionConnectionConditions(extensions.ParamsMatch(match))
-}

@@ -54,6 +54,31 @@ operations:
       $ref: '#/channels/socket'
 `
 
+const parameterizedChannelSpec = `asyncapi: 3.0.0
+info:
+  title: Parameterized Events
+  version: 1.0.0
+channels:
+  userEvents:
+    address: /users/{id}/events
+    parameters:
+      id:
+        description: user id
+    bindings:
+      ws:
+        method: GET
+    messages:
+      evt:
+        examples:
+          - payload:
+              id: 1
+operations:
+  receiveUserEvents:
+    action: receive
+    channel:
+      $ref: '#/channels/userEvents'
+`
+
 const unsupportedChannelSpec = `asyncapi: 3.0.0
 info:
   title: Kafka Events
@@ -140,6 +165,29 @@ func TestBuildAsyncRouteMappings_WS(t *testing.T) {
 	assert.Equal(t, "/socket", rm.Path)
 	assert.Equal(t, "GET", rm.Method)
 	assert.Equal(t, "receive", rm.Action)
+}
+
+/*
+Scenario: Parameterized async channel addresses keep the brace parameter form
+Given an asyncapi channel with address /users/{id}/events
+When BuildRouteMappings is called
+Then the ChiPattern keeps the {id} brace segment (chi v5 native parameter
+syntax) so chi populates route params and {$channel.id} resolves instead of
+silently evaluating to nothing
+
+Related spec scenarios: RS.ASP.11
+*/
+func TestBuildAsyncRouteMappings_ParameterizedAddress(t *testing.T) {
+	t.Parallel()
+
+	info := mustAsyncInfo(t, parameterizedChannelSpec, "")
+	mappings, err := BuildRouteMappings([]SchemaInfo{info})
+	require.NoError(t, err)
+	require.Len(t, mappings, 1)
+	rm := mappings[0]
+	assert.Equal(t, asyncapi.ProtocolWS, rm.Protocol)
+	assert.Equal(t, "/users/{id}/events", rm.Path)
+	assert.Equal(t, "/users/{id}/events", rm.ChiPattern, "async address must keep the chi v5 brace parameter syntax")
 }
 
 /*

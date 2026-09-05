@@ -7,11 +7,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/xeipuuv/gojsonschema"
@@ -109,8 +108,15 @@ var addExampleRequestSchema = gojsonschema.NewGoLoader(map[string]any{
 		"validate": map[string]any{"type": "boolean"},
 		"ttl":      map[string]any{"type": "integer", "minimum": 0},
 		"conditions": map[string]any{
-			"type":                 "object",
-			"additionalProperties": true,
+			"type": "object",
+			"additionalProperties": map[string]any{
+				"oneOf": []any{
+					map[string]any{"type": "string"},
+					map[string]any{"type": "number"},
+					map[string]any{"type": "boolean"},
+					map[string]any{"type": "object"},
+				},
+			},
 		},
 		"response": map[string]any{
 			"type":     "object",
@@ -145,117 +151,6 @@ func validateAddExampleRequest(rawJSON []byte) error {
 	return nil
 }
 
-// filterRecords filters request records based on query parameters.
-func filterRecords(records []RequestRecord, query url.Values) []RequestRecord {
-	filtered := make([]RequestRecord, 0, len(records))
-	for _, rec := range records {
-		// Filter by path
-		if path := query.Get("path"); path != "" && rec.Path != path {
-			continue
-		}
-		// Filter by method
-		if method := query.Get("method"); method != "" && rec.Method != method {
-			continue
-		}
-		// Filter by time_from (milliseconds since epoch)
-		if timeFromStr := query.Get("time_from"); timeFromStr != "" {
-			if timeFrom, err := strconv.ParseInt(timeFromStr, 10, 64); err == nil {
-				if rec.Timestamp.UnixMilli() < timeFrom {
-					continue
-				}
-			}
-		}
-		// Filter by time_till
-		if timeTillStr := query.Get("time_till"); timeTillStr != "" {
-			if timeTill, err := strconv.ParseInt(timeTillStr, 10, 64); err == nil {
-				if rec.Timestamp.UnixMilli() > timeTill {
-					continue
-				}
-			}
-		}
-		filtered = append(filtered, rec)
-	}
-	return filtered
-}
-
-// paginateRecords applies offset and limit pagination to records.
-func paginateRecords(records []RequestRecord, offset, limit int) []RequestRecord {
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > len(records) {
-		offset = len(records)
-	}
-	if limit < 0 {
-		limit = 0
-	}
-	end := offset + limit
-	if end > len(records) {
-		end = len(records)
-	}
-	return records[offset:end]
-}
-
-// recordsToAPIResponse converts request records to API response format.
-func recordsToAPIResponse(records []RequestRecord) []map[string]any {
-	items := make([]map[string]any, len(records))
-	for i, rec := range records {
-		var body any
-		if len(rec.Body) > 0 {
-			// Try to unmarshal as JSON, else keep as string
-			var jsonBody any
-			if err := json.Unmarshal(rec.Body, &jsonBody); err == nil {
-				body = jsonBody
-			} else {
-				body = string(rec.Body)
-			}
-		}
-		headers := make(map[string]string)
-		for k, v := range rec.Headers {
-			if len(v) > 0 {
-				headers[k] = v[0]
-			}
-		}
-		items[i] = map[string]any{
-			"ts":      rec.Timestamp.UnixMilli(),
-			"url":     rec.Path + "?" + rec.Query,
-			"method":  rec.Method,
-			"body":    body,
-			"headers": headers,
-		}
-	}
-	return items
-}
-
-func (s *Server) handleGetRequests(w http.ResponseWriter, r *http.Request) {
-	records := s.historyStore.GetAll()
-	query := r.URL.Query()
-
-	// Filtering
-	filtered := filterRecords(records, query)
-
-	// Pagination
-	offset, _ := strconv.Atoi(query.Get("offset"))
-	if offset < 0 {
-		offset = 0
-	}
-	limit, _ := strconv.Atoi(query.Get("limit"))
-	if limit <= 0 || limit > 100 {
-		limit = 100
-	}
-	paginated := paginateRecords(filtered, offset, limit)
-
-	// Convert to API response
-	items := recordsToAPIResponse(paginated)
-	response := map[string]any{
-		"data": items,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil && s.config.Verbose {
-		slog.Debug("Failed to encode response", "err", err)
-	}
-}
-
 // newExampleID returns a time-unique example id in the given namespace. The
 // namespace prefix keeps runtime-async ids ("rtex-") disjoint from sync
 // dynamic-example ids ("dynex-"), so DELETE /_mock/examples/{id} never has to
@@ -264,129 +159,189 @@ func newExampleID(namespace string) string {
 	return fmt.Sprintf("%s-%d", namespace, time.Now().UnixNano())
 }
 
+// addExampleRequest is the decoded body of POST /_mock/examples.
+type addExampleRequest struct {
+	Path       string         `json:"path"`
+	Method     string         `json:"method"`
+	Protocol   string         `json:"protocol"`
+	Channel    string         `json:"channel"`
+	Match      map[string]any `json:"match"`
+	Interval   int            `json:"interval"`
+	Delay      int            `json:"delay"`
+	Once       bool           `json:"once"`
+	Validate   *bool          `json:"validate"`
+	TTL        int            `json:"ttl"`
+	Conditions map[string]any `json:"conditions"`
+	Response   struct {
+		Code    int               `json:"code"`
+		Headers map[string]string `json:"headers"`
+		Body    any               `json:"body"`
+	} `json:"response"`
+}
+
 func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
-	// Read the raw body for validation
-	bodyBytes, err := io.ReadAll(r.Body)
+	req, err := decodeAddExampleRequest(r)
 	if err != nil {
-		if s.config.Verbose {
-			slog.Debug("Failed to read request body", "err", err)
-		}
-		writeJSONError(w, http.StatusBadRequest, "failed to read request body")
-		return
-	}
-	// Validate against OpenAPI schema
-	if err := validateAddExampleRequest(bodyBytes); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Decode into struct
-	var req struct {
-		Path       string         `json:"path"`
-		Method     string         `json:"method"`
-		Protocol   string         `json:"protocol"`
-		Channel    string         `json:"channel"`
-		Match      map[string]any `json:"match"`
-		Interval   int            `json:"interval"`
-		Delay      int            `json:"delay"`
-		Once       bool           `json:"once"`
-		Validate   bool           `json:"validate"`
-		TTL        int            `json:"ttl"`
-		Conditions map[string]any `json:"conditions"`
-		Response   struct {
-			Code    int               `json:"code"`
-			Headers map[string]string `json:"headers"`
-			Body    any               `json:"body"`
-		} `json:"response"`
-	}
-	if err := json.Unmarshal(bodyBytes, &req); err != nil {
-		http.Error(w, `{"error":"Invalid JSON"}`, http.StatusBadRequest)
+	mapping, err := s.resolveExampleTarget(req)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if req.Validate == nil || *req.Validate {
+		if mapping.Operation != nil && mapping.Responses != nil {
+			if verr := s.validateExampleResponse(req, mapping); verr != nil {
+				writeJSONError(w, http.StatusBadRequest, verr.Error())
+				return
+			}
+		}
+	}
+	if needsRuntimeRegistration(mapping, req) {
+		s.registerAsyncRuntimeExample(w, req, mapping)
+		return
+	}
+	s.registerDynamicExample(w, req, mapping)
+}
+
+// validateExampleResponse validates an add-example response body against the
+// resolved route's OpenAPI response schema for the requested status code and
+// media type. Async targets have no OpenAPI schema and skip validation.
+func (s *Server) validateExampleResponse(req *addExampleRequest, mapping *RouteMapping) error {
+	if req.Response.Body == nil {
+		return nil
+	}
+	schema := responseSchemaFor(mapping.Responses, req.Response.Code)
+	if schema == nil {
+		return nil
+	}
+	if err := schema.VisitJSON(req.Response.Body); err != nil {
+		return fmt.Errorf("response body does not match the OpenAPI schema for status %d: %w", req.Response.Code, err)
+	}
+	return nil
+}
+
+// responseSchemaFor returns the JSON schema of a response status code's first
+// JSON media type, or nil when none is declared.
+func responseSchemaFor(responses *openapi3.Responses, code int) *openapi3.Schema {
+	if responses == nil {
+		return nil
+	}
+	respMap := responses.Map()
+	respRef := respMap[fmt.Sprintf("%d", code)]
+	if respRef == nil || respRef.Value == nil || respRef.Value.Content == nil {
+		return nil
+	}
+	for _, mt := range respRef.Value.Content {
+		if mt == nil || mt.Schema == nil || mt.Schema.Value == nil {
+			continue
+		}
+		return mt.Schema.Value
+	}
+	return nil
+}
+
+// decodeAddExampleRequest reads, schema-validates and decodes an add-example
+// body, applying the field checks that are independent of the resolved target.
+func decodeAddExampleRequest(r *http.Request) (*addExampleRequest, error) {
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read request body: %w", err)
+	}
+	if err := validateAddExampleRequest(bodyBytes); err != nil {
+		return nil, err
+	}
+	var req addExampleRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		return nil, fmt.Errorf("invalid JSON")
 	}
 	if req.Response.Code == 0 || (req.Path == "" && req.Channel == "") {
-		writeJSONError(w, http.StatusBadRequest, "missing required fields")
-		return
+		return nil, fmt.Errorf("missing required fields")
 	}
 	req.Method = cmp.Or(req.Method, DefaultMethod)
 
 	// Single-trigger rule (RS.MAPI.29): an async target has exactly one
 	// trigger — interval OR an {$event.*}-based match, never both.
 	if matchesEventContext(req.Match) && req.Interval > 0 {
-		writeJSONError(w, http.StatusBadRequest, "'interval' and an event-based 'match' are mutually exclusive")
-		return
+		return nil, fmt.Errorf("'interval' and an event-based 'match' are mutually exclusive")
 	}
+	return &req, nil
+}
 
-	// Resolve the target route: OpenAPI path/method or AsyncAPI channel.
-	var targetMapping *RouteMapping
+// resolveExampleTarget maps an add-example request to its route: AsyncAPI
+// targets resolve by protocol/channel, OpenAPI targets by path/method. A
+// runtime match on an async target must drive emission, so only an
+// {$event.*}-based match is accepted; a connection-only or literal match has
+// no trigger and is rejected rather than silently registered nowhere
+// (RS.MAPI.24-26, RS.MAPI.33).
+func (s *Server) resolveExampleTarget(req *addExampleRequest) (*RouteMapping, error) {
 	if req.Protocol != "" || req.Channel != "" {
-		targetMapping = s.findAsyncRouteMapping(req.Protocol, req.Channel, req.Method)
-		if targetMapping == nil {
-			writeJSONError(w, http.StatusBadRequest, "no matching route found")
-			return
+		mapping := s.findAsyncRouteMapping(req.Protocol, req.Channel, req.Method)
+		if mapping == nil {
+			return nil, fmt.Errorf("no matching route found")
 		}
-	} else {
-		for i := range s.mappings {
-			mapping := &s.mappings[i]
-			if mapping.Pattern == req.Path && mapping.Method == req.Method {
-				targetMapping = mapping
-				break
-			}
+		if mapping.Protocol != "" && req.Match != nil && !matchesEventContext(req.Match) {
+			return nil, fmt.Errorf("async target 'match' must reference the event context ({$event.*}); use 'interval' for periodic emission")
 		}
-		if targetMapping == nil {
-			writeJSONError(w, http.StatusBadRequest, "no matching route found")
-			return
+		return mapping, nil
+	}
+	for i := range s.mappings {
+		if m := &s.mappings[i]; m.Pattern == req.Path && m.Method == req.Method {
+			return m, nil
 		}
 	}
-	// TODO: validate response body against OpenAPI schema if req.Validate is true
-	// (skipped for now)
+	return nil, fmt.Errorf("no matching route found")
+}
 
-	// Runtime async-driven examples (match/interval) register through the
-	// event broker / scheduler (RS.MAPI.24-26, RS.MAPI.33). A runtime match on
-	// an async target must drive emission, so only an {$event.*}-based match is
-	// accepted; a connection-only or literal match has no trigger and is
-	// rejected rather than silently registered nowhere.
-	if targetMapping.Protocol != "" && req.Match != nil && !matchesEventContext(req.Match) {
-		writeJSONError(w, http.StatusBadRequest, "async target 'match' must reference the event context ({$event.*}); use 'interval' for periodic emission")
+// needsRuntimeRegistration reports whether an async target carries a trigger
+// (match or interval) that registers through the event broker / scheduler.
+func needsRuntimeRegistration(mapping *RouteMapping, req *addExampleRequest) bool {
+	return mapping.Protocol != "" && (req.Match != nil || req.Interval > 0)
+}
+
+// registerAsyncRuntimeExample registers an event-driven or periodically driven
+// example through the event broker / scheduler and responds with its runtime
+// identity (RS.MAPI.24-26).
+func (s *Server) registerAsyncRuntimeExample(w http.ResponseWriter, req *addExampleRequest, mapping *RouteMapping) {
+	id := newExampleID("rtex")
+	headers := make(map[string]any, len(req.Response.Headers))
+	for k, v := range req.Response.Headers {
+		headers[k] = v
+	}
+	ext := make(map[string]any)
+	if req.Match != nil {
+		ext["x-mock-match"] = req.Match
+	}
+	if req.Interval > 0 {
+		ext["x-mock-interval"] = req.Interval
+	}
+	if req.Delay > 0 {
+		ext["x-mock-delay"] = req.Delay
+	}
+	example := &loader.MessageExampleSpec{
+		Name:       "runtime-" + id,
+		Headers:    headers,
+		Payload:    req.Response.Body,
+		Extensions: ext,
+	}
+	kind, jobID, err := s.registerRuntimeExample(id, mapping, example)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if targetMapping.Protocol != "" && (req.Match != nil || req.Interval > 0) {
-		id := newExampleID("rtex")
-		headers := make(map[string]any, len(req.Response.Headers))
-		for k, v := range req.Response.Headers {
-			headers[k] = v
-		}
-		ext := make(map[string]any)
-		if req.Match != nil {
-			ext["x-mock-match"] = req.Match
-		}
-		if req.Interval > 0 {
-			ext["x-mock-interval"] = req.Interval
-		}
-		if req.Delay > 0 {
-			ext["x-mock-delay"] = req.Delay
-		}
-		example := &loader.MessageExampleSpec{
-			Name:       "runtime-" + id,
-			Headers:    headers,
-			Payload:    req.Response.Body,
-			Extensions: ext,
-		}
-		kind, jobID, err := s.registerRuntimeExample(id, targetMapping, example)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"success": true,
-			"message": "Example added",
-			"id":      id,
-			"kind":    triggerKindString(kind),
-			"jobID":   jobID,
-		})
-		return
-	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"message": "Example added",
+		"id":      id,
+		"kind":    triggerKindString(kind),
+		"jobID":   jobID,
+	})
+}
 
-	// Create dynamic example
+// registerDynamicExample stores a sync or async reply example in the example
+// registry and responds with its id.
+func (s *Server) registerDynamicExample(w http.ResponseWriter, req *addExampleRequest, mapping *RouteMapping) {
 	id := newExampleID("dynex")
 	example := dynamicExample{
 		onceID:     id,
@@ -401,24 +356,21 @@ func (s *Server) handleAddExample(w http.ResponseWriter, r *http.Request) {
 	example.response.headers = req.Response.Headers
 	example.response.body = req.Response.Body
 	// Store under mapping key
-	key := routeKey(targetMapping.Method, targetMapping.ChiPattern)
+	key := routeKey(mapping.Method, mapping.ChiPattern)
 	if s.config.Verbose {
 		slog.Debug("handleAddExample: storing dynamic example",
 			"key", key,
 			"path", req.Path,
 			"method", req.Method,
-			"chiPattern", targetMapping.ChiPattern,
-			"pattern", targetMapping.Pattern,
+			"chiPattern", mapping.ChiPattern,
+			"pattern", mapping.Pattern,
 			"numExamples", len(s.registry.dynamicExamples[key])+1)
 	}
 	s.registry.addDynamic(key, example)
 	// Respond with success
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"message": "Example added",
 		"id":      id,
-	}); err != nil && s.config.Verbose {
-		slog.Debug("Failed to encode success response", "err", err)
-	}
+	})
 }

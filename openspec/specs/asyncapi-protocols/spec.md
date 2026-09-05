@@ -55,3 +55,7 @@ For a send operation without an explicit reply message, the server SHALL acknowl
 - **WHEN** an HTTP POST arrives for a send operation that has no reply message
 - **THEN** the server responds with HTTP 200 and an empty body
 
+#### Scenario RS.ASP.11: Parameterized channel addresses resolve
+- **WHEN** an AsyncAPI ws/http channel address contains a `{param}` placeholder (e.g. `/users/{id}/events`)
+- **THEN** the route is registered so chi captures the segment and `{$channel.<param>}` / `addressParams` resolve instead of silently evaluating to nothing
+

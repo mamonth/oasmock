@@ -116,45 +116,8 @@ func (r *exampleRegistry) selectDynamic(key string, eval runtime.Evaluator) (*dy
 	examples := r.dynamicExamples[key]
 	r.dyMu.RUnlock()
 	for idx, ex := range examples {
-		if r.verbose {
-			slog.Debug("selectDynamicExample: checking example",
-				"idx", idx,
-				"once", ex.once,
-				"conditions", len(ex.conditions))
-		}
-		// Check once flag
-		if ex.once {
-			if r.isOnceUsed(ex.onceID) {
-				if r.verbose {
-					slog.Debug("selectDynamicExample: example already used", "onceID", ex.onceID)
-				}
-				continue
-			}
-		}
-		// Check TTL expiry
-		if isExpired(ex) {
-			if r.verbose {
-				slog.Debug("selectDynamicExample: example expired",
-					"idx", idx,
-					"ttl", ex.ttl,
-					"addedAt", ex.addedAt)
-			}
+		if !r.exampleEligible(ex, eval) {
 			continue
-		}
-		// Evaluate conditions
-		if len(ex.conditions) > 0 {
-			// Convert to ParamsMatch
-			pm := extensions.ParamsMatch(ex.conditions)
-			matched, err := extensions.EvaluateParamsMatch(pm, eval)
-			if r.verbose {
-				slog.Debug("selectDynamicExample: condition evaluation result",
-					"matched", matched, "err", err, "conditions", ex.conditions)
-			}
-			if err != nil || !matched {
-				continue
-			}
-		} else if r.verbose {
-			slog.Debug("selectDynamicExample: no conditions, matching")
 		}
 		// Matched
 		if ex.once {
@@ -169,6 +132,22 @@ func (r *exampleRegistry) selectDynamic(key string, eval runtime.Evaluator) (*dy
 		slog.Debug("selectDynamicExample: no matching examples found", "key", key)
 	}
 	return nil, ""
+}
+
+// exampleEligible reports whether a dynamic example is selectable: it is not
+// once-used or expired, and its conditions evaluate true (or it has none).
+func (r *exampleRegistry) exampleEligible(ex dynamicExample, eval runtime.Evaluator) bool {
+	if ex.once && r.isOnceUsed(ex.onceID) {
+		return false
+	}
+	if isExpired(ex) {
+		return false
+	}
+	if len(ex.conditions) == 0 {
+		return true
+	}
+	matched, err := extensions.EvaluateParamsMatch(extensions.ParamsMatch(ex.conditions), eval)
+	return err == nil && matched
 }
 
 // sweepExpired removes expired dynamic examples and their once markers.

@@ -150,12 +150,12 @@ func asyncRoute(ch *asyncapi.Channel, prefix, protocol string, op *asyncapi.Oper
 		rm.Method = method
 		rm.Path = fullAddress
 		rm.Pattern = address
-		rm.ChiPattern = fullAddress
+		rm.ChiPattern = OpenAPIPatternToChi(fullAddress)
 	case asyncapi.ProtocolWS:
 		rm.Method = http.MethodGet
 		rm.Path = fullAddress
 		rm.Pattern = address
-		rm.ChiPattern = fullAddress
+		rm.ChiPattern = OpenAPIPatternToChi(fullAddress)
 	default:
 		return RouteMapping{}, fmt.Errorf("channel %q: unsupported protocol %q", ch.ID, protocol)
 	}
@@ -237,8 +237,10 @@ func BuildRouteMappings(infos []SchemaInfo) ([]RouteMapping, error) {
 				return nil, err
 			}
 			mappings = append(mappings, asyncMappings...)
-		default:
+		case KindOpenAPI:
 			mappings = append(mappings, buildOpenAPIRouteMappings(info)...)
+		default:
+			return nil, fmt.Errorf("unsupported schema kind: %q", info.Kind)
 		}
 	}
 
@@ -264,7 +266,7 @@ func buildOpenAPIRouteMappings(info SchemaInfo) []RouteMapping {
 		}
 
 		// Apply prefix to the path
-		fullPath := applyPrefix(prefix, path)
+		fullPath := PrefixPath(prefix, path)
 
 		// Create mappings for each HTTP method defined in the path item
 		mappings = append(mappings, createMappingsForPath(path, fullPath, prefix, pathItem)...)
@@ -272,7 +274,12 @@ func buildOpenAPIRouteMappings(info SchemaInfo) []RouteMapping {
 	return mappings
 }
 
-func applyPrefix(prefix, path string) string {
+// PrefixPath joins a schema prefix and a route path into the fully-prefixed
+// route path (e.g. "/api" + "/users" -> "/api/users"). It is the single
+// prefix-normalization point shared by OpenAPI route mapping, RPC gateway
+// mapping and the server's gateway setup. A bare "/" collapses to the prefix
+// so the root route never double-slashes.
+func PrefixPath(prefix, path string) string {
 	if prefix == "" {
 		return path
 	}
@@ -316,25 +323,11 @@ func createMappingsForPath(originalPath, fullPath, prefix string, pathItem *open
 	return mappings
 }
 
-// OpenAPIPatternToChi converts an OpenAPI path pattern (with {param}) to a Chi pattern.
-// Chi supports both {param} and :param syntax. We keep the OpenAPI braces.
+// OpenAPIPatternToChi returns the chi-compatible routing pattern for an
+// OpenAPI/AsyncAPI path pattern containing {param} braces. chi v5 uses the
+// same brace syntax as OpenAPI ({id}), so the pattern is preserved verbatim:
+// converting to the legacy colon form (:id) would be treated by chi as a
+// literal static segment and silently break every parameterized route.
 func OpenAPIPatternToChi(pattern string) string {
 	return pattern
-}
-
-// FindOperation finds the operation that matches the given method and path.
-// It returns the route mapping and extracted path parameters.
-func FindOperation(mappings []RouteMapping, method, path string) (*RouteMapping, map[string]string, bool) {
-	for _, mapping := range mappings {
-		if mapping.Method != method {
-			continue
-		}
-
-		// Simple exact match for now; later we need to handle path parameters
-		// For MVP, we'll do exact match on path
-		if mapping.Path == path {
-			return &mapping, nil, true
-		}
-	}
-	return nil, nil, false
 }

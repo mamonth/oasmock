@@ -51,7 +51,7 @@ Related spec scenarios: RS.ATM.12
 func TestRenderMessageSpecs_Increment(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
 	stateStore.EXPECT().Increment("/ns", "counter", 2.0).Return(9.0, nil)
 
@@ -83,7 +83,7 @@ Related spec scenarios: RS.ATM.13
 func TestRenderMessageSpecs_Delete(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
 	stateStore.EXPECT().Delete("/ns", "key")
 

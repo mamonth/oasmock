@@ -22,6 +22,7 @@ import (
 )
 
 func binaryPath(t *testing.T) string {
+	t.Helper()
 	return binhelper.GetBuilded(t)
 }
 
@@ -263,7 +264,6 @@ func TestCLISuccessfulExitCode(t *testing.T) {
 			if exitErr.ExitCode() != 0 {
 				t.Logf("process exited with code %d: %v", exitErr.ExitCode(), err)
 			}
-
 		} else {
 			t.Logf("wait error: %v", err)
 		}

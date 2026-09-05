@@ -11,7 +11,7 @@ import (
 /*
 Scenario: Applying prefix to route path
 Given a prefix and a path
-When applyPrefix is called
+When PrefixPath is called
 Then it returns the concatenated path with proper slash handling, trimming trailing slashes
 
 Related spec scenarios: RS.MSC.6
@@ -73,17 +73,18 @@ func TestApplyPrefix(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := applyPrefix(tt.prefix, tt.path)
-			assert.Equal(t, tt.want, got, "applyPrefix(%q, %q)", tt.prefix, tt.path)
+			got := PrefixPath(tt.prefix, tt.path)
+			assert.Equal(t, tt.want, got, "PrefixPath(%q, %q)", tt.prefix, tt.path)
 		})
 	}
 }
 
 /*
-Scenario: Converting OpenAPI path pattern to Chi router pattern
-Given an OpenAPI path pattern with optional curly‑brace parameters
+Scenario: Transforming OpenAPI path pattern to Chi router pattern
+Given an OpenAPI path pattern with optional curly-brace parameters
 When OpenAPIPatternToChi is called
-Then it returns Chi‑style colon‑prefixed parameter names, preserving other characters
+Then it preserves the brace parameter form ({id}), which chi v5 matches
+natively; the legacy colon form would be treated as a literal segment
 
 Related spec scenarios: RS.MSC.4, RS.MSC.5
 */
@@ -143,90 +144,6 @@ func TestOpenAPIPatternToChi(t *testing.T) {
 }
 
 /*
-Scenario: Finding operation in route mappings by method and path
-Given a list of route mappings
-When FindOperation is called with a method and path
-Then it returns the matching mapping and true if found, false otherwise
-
-Related spec scenarios: RS.MSC.4, RS.MSC.5, RS.MSC.6, RS.MSC.7
-*/
-func TestFindOperation(t *testing.T) {
-	t.Parallel()
-
-	mappings := []RouteMapping{
-		{
-			Method:     "GET",
-			Path:       "/api/users",
-			ChiPattern: "/api/users",
-		},
-		{
-			Method:     "POST",
-			Path:       "/api/users",
-			ChiPattern: "/api/users",
-		},
-		{
-			Method:     "GET",
-			Path:       "/api/posts/{id}",
-			ChiPattern: "/api/posts/:id",
-		},
-	}
-
-	tests := []struct {
-		name      string
-		method    string
-		path      string
-		wantFound bool
-		wantPath  string
-	}{
-		{
-			name:      "exact match GET /api/users",
-			method:    "GET",
-			path:      "/api/users",
-			wantFound: true,
-			wantPath:  "/api/users",
-		},
-		{
-			name:      "exact match POST /api/users",
-			method:    "POST",
-			path:      "/api/users",
-			wantFound: true,
-			wantPath:  "/api/users",
-		},
-		{
-			name:      "method mismatch",
-			method:    "PUT",
-			path:      "/api/users",
-			wantFound: false,
-		},
-		{
-			name:      "path mismatch",
-			method:    "GET",
-			path:      "/api/nonexistent",
-			wantFound: false,
-		},
-		{
-			name:      "path with param - exact match fails",
-			method:    "GET",
-			path:      "/api/posts/{id}",
-			wantFound: true,
-			wantPath:  "/api/posts/{id}",
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			mapping, _, found := FindOperation(mappings, tt.method, tt.path)
-			assert.Equal(t, tt.wantFound, found)
-			if tt.wantFound {
-				assert.Equal(t, tt.wantPath, mapping.Path)
-			}
-		})
-	}
-}
-
-/*
 Scenario: Building route mappings from loaded OpenAPI schemas
 Given loaded OpenAPI schemas without prefix
 When BuildRouteMappings is called
@@ -272,7 +189,7 @@ func TestBuildRouteMappings(t *testing.T) {
 		key := fmt.Sprintf("%s %s", mapping.Method, mapping.Path)
 		foundPaths[key] = true
 
-		// Check ChiPattern conversion for path parameters
+		// Check ChiPattern keeps the brace parameter form chi v5 matches
 		if mapping.Path == "/users/{id}" {
 			assert.Equal(t, "/users/{id}", mapping.ChiPattern, "ChiPattern conversion failed")
 		}

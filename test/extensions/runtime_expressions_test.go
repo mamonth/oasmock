@@ -45,7 +45,7 @@ func TestRuntimeExpressionPathParam(t *testing.T) {
 	defer builtinResp.Body.Close() //nolint:errcheck
 	t.Logf("Built-in route test: status=%d", builtinResp.StatusCode)
 	// Accept either 200 (example exists) or 501 (no example) but not 404
-	if builtinResp.StatusCode == 404 {
+	if builtinResp.StatusCode == http.StatusNotFound {
 		t.Fatal("Route /users/:id not found - route not registered")
 	}
 
@@ -148,7 +148,7 @@ func TestRuntimeExpressionRequestHeader(t *testing.T) {
 
 	// Make request with Content-Type header
 	client := &http.Client{}
-	req, err := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/echo", port), strings.NewReader(`{}`))
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://localhost:%d/echo", port), strings.NewReader(`{}`))
 	require.NoError(t, err, "failed to create request")
 	req.Header.Set("Content-Type", "application/json")
 	resp2, err := client.Do(req)
@@ -223,7 +223,7 @@ func TestRuntimeExpressionRequestBody(t *testing.T) {
 	// Make request with JSON body containing field
 	client := &http.Client{}
 	reqBody := strings.NewReader(`{"field": "expected"}`)
-	req, err := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/body", port), reqBody)
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://localhost:%d/body", port), reqBody)
 	require.NoError(t, err, "failed to create request")
 	req.Header.Set("Content-Type", "application/json")
 	resp2, err := client.Do(req)

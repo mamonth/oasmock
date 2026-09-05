@@ -60,6 +60,10 @@ spec-coverage:
 lint:
 	golangci-lint run
 
+# Check that every unit test carries a Gherkin Scenario: header
+test-headers:
+	python3 scripts/check_test_headers.py
+
 # Clean up
 clean:
 	rm -rf bin/

@@ -151,3 +151,41 @@ func TestManageStream_ScheduleEnvelopes(t *testing.T) {
 	assert.Equal(t, "/alerts", stopped[0].Schedule.Channel)
 	assert.Equal(t, 50, stopped[0].Schedule.Interval)
 }
+
+/*
+Scenario: A silently-dead management stream subscriber is reaped
+Given a running server with a short management-stream read idle and a connected
+/mock/stream subscriber that stops sending frames
+When the idle interval elapses
+Then the subscriber is removed from the management stream registry and its
+handler goroutine returns
+
+Related spec scenarios: RS.AMG.29
+*/
+func TestManageStream_ReapsIdleSubscriber(t *testing.T) {
+	t.Parallel()
+
+	doc, err := asyncapi.Parse([]byte(streamLifecycleDoc))
+	require.NoError(t, err)
+	schemas := []loader.SchemaInfo{{Kind: loader.KindAsyncAPI, Async: doc, Prefix: ""}}
+	srv, err := New(Config{HistorySize: DefaultHistorySize, EnableControlAPI: true}, schemas)
+	require.NoError(t, err)
+	// Force a short idle so the reaping path is exercised without waiting on
+	// the 60s production bound.
+	srv.manageStream.mu.Lock()
+	srv.manageStream.readIdle = 60 * time.Millisecond
+	srv.manageStream.mu.Unlock()
+
+	ts := httptest.NewServer(srv.router)
+	defer ts.Close() //nolint:errcheck
+
+	stream := dialManageStream(t, ts.URL, "")
+	// Do not read: a silently-dead peer.
+	time.Sleep(300 * time.Millisecond)
+
+	srv.manageStream.mu.RLock()
+	subCount := len(srv.manageStream.subs)
+	srv.manageStream.mu.RUnlock()
+	_ = stream.Close() //nolint:errcheck
+	assert.Zero(t, subCount, "idle subscriber must be reaped from the registry")
+}

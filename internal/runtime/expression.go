@@ -8,6 +8,19 @@ import (
 	"strings"
 )
 
+// Data source names used in runtime expressions (e.g. {$request.path.id}).
+// They are the single source of truth for the scriptable expression namespaces;
+// the server registers sources with these names and the evaluator resolves them.
+const (
+	SourceRequest    = "request"
+	SourceState      = "state"
+	SourceEnv        = "env"
+	SourceEvent      = "event"
+	SourceConnection = "connection"
+	SourceMessage    = "message"
+	SourceChannel    = "channel"
+)
+
 // splitEscapedPath splits a path by dots, respecting escaped dots (\.).
 // Returns the parts with escapes removed.
 func splitEscapedPath(path string) []string {
@@ -94,40 +107,45 @@ func (r *RequestSource) Get(path string) (any, bool) {
 
 	switch category {
 	case "path":
-		if val, ok := r.PathParams[key]; ok {
-			return val, true
-		}
+		return stringLookup(r.PathParams, key)
 	case "query":
-		if vals, ok := r.QueryParams[key]; ok && len(vals) > 0 {
-			if len(vals) == 1 {
-				return vals[0], true
-			}
-			return vals, true
-		}
+		return sliceLookup(r.QueryParams, key)
 	case "header":
-		if vals, ok := r.Headers[strings.ToLower(key)]; ok && len(vals) > 0 {
-			if len(vals) == 1 {
-				return vals[0], true
-			}
-			return vals, true
-		}
+		return sliceLookup(r.Headers, strings.ToLower(key))
 	case "body":
-		if r.Body == nil {
-			return nil, false
-		}
-		// Use getNested for nested path traversal
-		remainingParts := parts[1:]
-		if len(remainingParts) == 0 {
-			return nil, false
-		}
-		return getNested(r.Body, remainingParts)
+		return nestedLookup(r.Body, parts[1:])
 	case "cookie":
-		if val, ok := r.Cookies[key]; ok {
-			return val, true
-		}
+		return stringLookup(r.Cookies, key)
 	}
 
 	return nil, false
+}
+
+// stringLookup returns the value of a flat map entry.
+func stringLookup(m map[string]string, key string) (any, bool) {
+	val, ok := m[key]
+	return val, ok
+}
+
+// sliceLookup returns a single value when a key has one entry and the full
+// slice when it has several.
+func sliceLookup(m map[string][]string, key string) (any, bool) {
+	vals, ok := m[key]
+	if !ok || len(vals) == 0 {
+		return nil, false
+	}
+	if len(vals) == 1 {
+		return vals[0], true
+	}
+	return vals, true
+}
+
+// nestedLookup traverses a nested body value by path parts.
+func nestedLookup(obj any, parts []string) (any, bool) {
+	if obj == nil || len(parts) == 0 {
+		return nil, false
+	}
+	return getNested(obj, parts)
 }
 
 // StateSource provides access to server state.
@@ -393,7 +411,6 @@ func (e *evaluator) Evaluate(expr string) (any, error) {
 func (e *evaluator) applyModifier(value any, modifier string) (any, error) {
 	// Check for modifier with argument (e.g., "default:value", "getByPath:path")
 	if name, arg, found := strings.Cut(modifier, ":"); found {
-
 		switch name {
 		case "default":
 			// Should have been handled earlier when value not found

@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"time"
 
@@ -57,16 +56,20 @@ func (s *Server) handleAsyncPush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Delay > 0 {
+		done := s.eventBus.doneChannel()
 		go func() {
-			time.Sleep(time.Duration(req.Delay) * time.Millisecond)
+			select {
+			case <-done:
+				return
+			case <-time.After(time.Duration(req.Delay) * time.Millisecond):
+			}
 			s.pushToChannel(req.Channel, req.ConnectionID, payload)
 		}()
 	} else {
 		s.pushToChannel(req.Channel, req.ConnectionID, payload)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 // evaluatePushPayload evaluates runtime expressions in a pushed payload using
@@ -74,8 +77,8 @@ func (s *Server) handleAsyncPush(w http.ResponseWriter, r *http.Request) {
 func (s *Server) evaluatePushPayload(payload map[string]any, channel string) (any, error) {
 	prefix := s.prefixForChannel(channel)
 	evaluator := runtime.NewEvaluator()
-	evaluator.AddSource("state", s.newStateSource(prefix))
-	evaluator.AddSource("env", s.newEnvSource())
+	evaluator.AddSource(runtime.SourceState, s.newStateSource(prefix))
+	evaluator.AddSource(runtime.SourceEnv, s.newEnvSource())
 	return s.evaluateValue(payload, evaluator)
 }
 
@@ -99,11 +102,7 @@ func (s *Server) prefixForChannel(channel string) string {
 // decodeAsyncPush parses and validates a push request body.
 func decodeAsyncPush(r *http.Request) (asyncPushRequest, error) {
 	var req asyncPushRequest
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
-	if err != nil {
-		return req, err
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := decodeJSONBody(r, &req); err != nil {
 		return req, err
 	}
 	return req, nil
@@ -122,28 +121,24 @@ func (s *Server) hasConnection(id string) bool {
 	return s.hubMgr.hasConnection(id)
 }
 
-// pushToChannel delivers a payload to a channel's consumers. A connection id
-// targets one consumer; otherwise it broadcasts. Both raw ws consumers and
-// SignalR hub connections are targeted.
+// pushToChannel delivers a payload to a channel's consumers through the
+// ConsumerBus (hubManager) so the targeted and broadcast paths match the
+// event-delivery pipeline instead of re-implementing the registry writes. A
+// connection id targets one consumer; otherwise the payload is broadcast to
+// every SignalR open-stream and raw ws consumer of the channel.
 func (s *Server) pushToChannel(channel, connectionID string, payload []byte) {
-	hub := s.hubForAddress(channel)
-	if hub != nil {
-		if hubChannelID := matchingHubChannel(hub, channel); hubChannelID != "" {
-			if connectionID != "" {
-				hub.pushToConnection(connectionID, hubChannelID, payload, hubChannelID)
-			} else {
-				hub.pushPayload(hubChannelID, payload)
+	if connectionID != "" {
+		for _, candidate := range s.hubMgr.Candidates(channel) {
+			if candidate.ConnectionID != connectionID {
+				continue
 			}
+			s.hubMgr.PushTo(candidate, channel, payload)
+			return
 		}
+		return
 	}
-	if reg := s.wsRegistry(); reg != nil {
-		targets := reg.connections(channel)
-		for _, ws := range targets {
-			if connectionID == "" || ws.id == connectionID {
-				ws.writer.write(payload)
-			}
-		}
-	}
+	s.hubMgr.SignalRPush(channel, payload)
+	s.hubMgr.WSBroadcast(channel, payload)
 }
 
 // matchingHubChannel finds the channel ID within a hub serving the address.
@@ -204,14 +199,7 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"consumers": consumers})
-}
-
-// pushPayload emits a payload into a hub channel's open streams or as a server
-// invocation when no stream is open.
-func (h *signalRHub) pushPayload(channelID string, payload []byte) {
-	h.pushToStreams(channelID, payload, channelID)
+	writeJSON(w, http.StatusOK, map[string]any{"consumers": consumers})
 }
 
 // handleGoneSchedule answers the removed /_mock/ws/schedule surface with HTTP
@@ -222,21 +210,20 @@ func (s *Server) handleGoneSchedule(w http.ResponseWriter, r *http.Request) {
 		"the async schedule endpoint is removed; use POST /_mock/examples with an AsyncAPI target, response.body and interval (and DELETE /_mock/examples/{exampleId} to stop)")
 }
 
+// disconnectRequest is the payload of POST /_mock/async/disconnect
+// (and the deprecated /_mock/ws/disconnect alias).
+type disconnectRequest struct {
+	ConnectionID string `json:"connectionId"`
+	Reason       string `json:"reason"`
+	Code         int    `json:"code"`
+	Abrupt       bool   `json:"abrupt"`
+}
+
 // handleAsyncDisconnect force-disconnects a consumer (RS.AMG.14-17).
 func (s *Server) handleAsyncDisconnect(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ConnectionID string `json:"connectionId"`
-		Reason       string `json:"reason"`
-		Code         int    `json:"code"`
-		Abrupt       bool   `json:"abrupt"`
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
-	if err != nil {
+	var req disconnectRequest
+	if err := decodeJSONBody(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	if req.ConnectionID == "" {
@@ -271,17 +258,11 @@ func (s *Server) handleAsyncDisconnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 // disconnectWS closes a WebSocket connection with a close frame or abruptly.
-func (s *Server) disconnectWS(w *wsWriter, req struct {
-	ConnectionID string `json:"connectionId"`
-	Reason       string `json:"reason"`
-	Code         int    `json:"code"`
-	Abrupt       bool   `json:"abrupt"`
-}) {
+func (s *Server) disconnectWS(w *wsWriter, req disconnectRequest) {
 	if w == nil {
 		return
 	}

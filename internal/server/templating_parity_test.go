@@ -47,11 +47,11 @@ Related spec scenarios: RS.ATM.1, RS.ATM.3
 func TestTemplateParity_MessageAndChannel(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
 
 	mapping := &RouteMapping{
-		Protocol: asyncWSProtocol,
+		Protocol: asyncapi.ProtocolWS,
 		Action:   "send",
 		Path:     "/echo",
 		Pattern:  "/echo",
@@ -82,7 +82,7 @@ Related spec scenarios: RS.ATM.11, RS.ATM.16
 func TestTemplateParity_StateNamespaceIsolation(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
 
 	var setNamespace string
@@ -90,7 +90,7 @@ func TestTemplateParity_StateNamespaceIsolation(t *testing.T) {
 		func(namespace, key string, value any) { setNamespace = namespace }).AnyTimes()
 
 	mapping := &RouteMapping{
-		Protocol: asyncWSProtocol,
+		Protocol: asyncapi.ProtocolWS,
 		Action:   "send",
 		Path:     "/tenant/ch",
 		Pattern:  "/ch",
@@ -134,11 +134,11 @@ Related spec scenarios: RS.ATM.2
 func TestTemplateParity_MessageHeader(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
 
 	mapping := &RouteMapping{
-		Protocol: asyncWSProtocol,
+		Protocol: asyncapi.ProtocolWS,
 		Action:   "send",
 		Path:     "/echo",
 		Pattern:  "/echo",
@@ -187,11 +187,11 @@ Related spec scenarios: RS.ATM.4
 func TestTemplateParity_StateExpression(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{"counter": 7}).AnyTimes()
 
 	mapping := &RouteMapping{
-		Protocol: asyncWSProtocol,
+		Protocol: asyncapi.ProtocolWS,
 		Action:   "send",
 		Path:     "/ch",
 		Pattern:  "/ch",

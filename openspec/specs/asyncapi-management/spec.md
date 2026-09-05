@@ -100,3 +100,11 @@ The mock server SHALL expose a management endpoint to fire a named event ad-hoc,
 - **WHEN** an ad-hoc fired event payload contains `{$state.*}` or `{$env.*}` expressions
 - **THEN** they are evaluated against the schema's isolated state namespace and environment before delivery
 
+#### Scenario RS.AMG.29: Management stream reaps idle subscribers
+- **WHEN** a connected `/_mock/stream` subscriber stops sending frames past the read-idle bound
+- **THEN** the subscriber is removed from the stream registry and its handler goroutine returns
+
+#### Scenario RS.AMG.30: Shutdown cancels pending delayed deliveries
+- **WHEN** the server shuts down with in-flight delayed pushes/events pending
+- **THEN** no delayed delivery occurs after shutdown (pending timers are cancelled)
+

@@ -5,7 +5,7 @@ info:
   version: 0.1.0
 servers:
   - url: http://localhost:19191/_mock
-    description: Default mock server
+    description: Default mock server port (configurable via --port / OASMOCK_PORT)
 paths:
   /examples:
     post:
@@ -34,9 +34,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AddExampleResponse'
         '400':
-          description: Invalid request
-        '500':
-          description: Internal server error
+          $ref: '#/components/responses/InvalidRequest'
   /examples/{exampleId}:
     delete:
       operationId: deleteExample
@@ -59,7 +57,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AsyncActionResponse'
         '404':
-          description: Unknown exampleId
+          $ref: '#/components/responses/NotFound'
   /requests:
     get:
       summary: Retrieve request history
@@ -80,12 +78,12 @@ paths:
             enum: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
         - name: limit
           in: query
-          description: Maximum number of records to return (default 100, max 100)
+          description: Maximum number of records to return (default 1000, max 1000)
           schema:
             type: integer
             minimum: 1
-            maximum: 100
-            default: 100
+            maximum: 1000
+            default: 1000
         - name: offset
           in: query
           description: Offset for pagination
@@ -132,27 +130,29 @@ paths:
               schema:
                 $ref: '#/components/schemas/AsyncActionResponse'
         '400':
-          description: Invalid request (missing/unknown type or event)
+          $ref: '#/components/responses/InvalidRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /events/fire:
     post:
       operationId: fireEventLegacy
       summary: Fire a named event (deprecated alias)
       description: |
         Deprecated alias of POST /_mock/events. Accepts the legacy body without
-        the `type` discriminator (defaults to "fire") alongside the new shape.
-        Kept for backward compatibility; use /_mock/events.
+        the `type` discriminator (defaults to "fire"). Kept for backward
+        compatibility; use /_mock/events.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/FireEventRequest'
+              $ref: '#/components/schemas/LegacyFireEventRequest'
       deprecated: true
       responses:
         '200':
           description: Event accepted
         '400':
-          description: Invalid request
+          $ref: '#/components/responses/InvalidRequest'
   /async/push:
     post:
       operationId: pushToChannel
@@ -175,9 +175,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/AsyncActionResponse'
         '400':
-          description: Invalid request
+          $ref: '#/components/responses/InvalidRequest'
         '404':
-          description: Unknown connectionId
+          $ref: '#/components/responses/NotFound'
   /async/consumers:
     get:
       operationId: listConsumers
@@ -221,9 +221,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/AsyncActionResponse'
         '400':
-          description: Invalid request
+          $ref: '#/components/responses/InvalidRequest'
         '404':
-          description: Unknown connectionId
+          $ref: '#/components/responses/NotFound'
   /stream:
     get:
       operationId: managementStream
@@ -252,7 +252,7 @@ paths:
             server pushes ManageEnvelope frames (per the envelope schemas; not an
             HTTP response body)
         '405':
-          description: Non-upgrade request rejected
+          $ref: '#/components/responses/NotUpgraded'
   /ws/push:
     post:
       operationId: pushToChannelLegacy
@@ -269,9 +269,9 @@ paths:
         '200':
           description: Push accepted
         '400':
-          description: Invalid request
+          $ref: '#/components/responses/InvalidRequest'
         '404':
-          description: Unknown connectionId
+          $ref: '#/components/responses/NotFound'
   /ws/consumers:
     get:
       operationId: listConsumersLegacy
@@ -307,7 +307,7 @@ paths:
               $ref: '#/components/schemas/ScheduleRequest'
       responses:
         '410':
-          description: Gone — use POST /_mock/examples with interval
+          $ref: '#/components/responses/GoneExamples'
   /ws/schedule/{pushId}:
     delete:
       operationId: stopRecurringPush
@@ -324,7 +324,7 @@ paths:
             type: string
       responses:
         '410':
-          description: Gone — use DELETE /_mock/examples/{exampleId}
+          $ref: '#/components/responses/GoneDelete'
   /ws/disconnect:
     post:
       operationId: disconnectConsumerLegacy
@@ -345,11 +345,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/AsyncActionResponse'
         '400':
-          description: Invalid request
+          $ref: '#/components/responses/InvalidRequest'
         '404':
-          description: Unknown connectionId
+          $ref: '#/components/responses/NotFound'
 components:
   schemas:
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
     AddExampleRequest:
       type: object
       required:
@@ -530,6 +538,31 @@ components:
           type: boolean
           default: false
           description: When true, the event is broadcast over all loaded schemas
+    LegacyFireEventRequest:
+      type: object
+      required:
+        - event
+      properties:
+        type:
+          type: string
+          enum: [fire]
+          default: fire
+          description: Optional discriminator; the legacy alias defaults to "fire"
+        event:
+          type: string
+          description: The named event to fire
+        payload:
+          type: object
+          description: Event payload exposed to consuming templates via {$event.*}
+        delay:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Delivery delay in milliseconds
+        global:
+          type: boolean
+          default: false
+          description: When true, the event is broadcast over all loaded schemas
     PushRequest:
       type: object
       required:
@@ -677,3 +710,40 @@ components:
                       type: string
                     streamId:
                       type: string
+  responses:
+    InvalidRequest:
+      description: The request is malformed, missing required fields, or references an unknown target
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: The referenced resource (example, connection, or route) does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: An unexpected server-side error occurred
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotUpgraded:
+      description: The request is a valid GET but did not attempt a WebSocket upgrade
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    GoneExamples:
+      description: Removed — use POST /_mock/examples with interval
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    GoneDelete:
+      description: Removed — use DELETE /_mock/examples/{exampleId}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

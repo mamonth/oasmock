@@ -45,7 +45,7 @@ For the hub path, the server SHALL expose `POST {hubPath}/negotiate` returning s
 
 #### Scenario RS.SHR.8: Successful negotiation
 - **WHEN** a client POSTs to `{hubPath}/negotiate` with `negotiateVersion=1`
-- **THEN** the server responds 200 with `connectionToken`, `connectionId`, `negotiateVersion: 1`, and `availableTransports` listing WebSockets with Text and Binary transfer formats
+- **THEN** the server responds 200 with `connectionToken`, `connectionId`, `negotiateVersion: 1`, and `availableTransports` listing WebSockets with the Text transfer format (Binary is not offered because the handshake rejects binary frames, RS.SHR.15)
 
 #### Scenario RS.SHR.9: Negotiate protocol version
 - **WHEN** a client requests negotiation without `negotiateVersion` (treated as 0)
@@ -116,4 +116,8 @@ The server SHALL keep an open-stream registry per connection so event-driven mes
 #### Scenario RS.SHR.21: Registry tracks open streams
 - **WHEN** one or more streams are open on a connection
 - **THEN** the registry retains `(connectionId, invocationId, channel ID)` so discovery and push endpoints can list and target them
+
+#### Scenario RS.SHR.22: Delivery deduplicates per connection
+- **WHEN** a connection has N open streams on a channel and a payload is delivered
+- **THEN** the payload reaches that connection's N streams exactly once each (never N×N): delivery candidates are unique per connection even when several streams are open
 

@@ -233,7 +233,7 @@ x-rpc:
 	cfg, err := ParseRpcConfig(spec)
 	require.NoError(t, err)
 
-	infos := []SchemaInfo{{Spec: spec, Prefix: ""}}
+	infos := []SchemaInfo{{Kind: KindOpenAPI, Spec: spec, Prefix: ""}}
 	mappings, err := BuildRpcMappings(infos, cfg)
 	require.NoError(t, err)
 
@@ -292,7 +292,7 @@ x-rpc:
 	cfg, err := ParseRpcConfig(spec)
 	require.NoError(t, err)
 
-	infos := []SchemaInfo{{Spec: spec, Prefix: ""}}
+	infos := []SchemaInfo{{Kind: KindOpenAPI, Spec: spec, Prefix: ""}}
 	mappings, err := BuildRpcMappings(infos, cfg)
 	require.NoError(t, err)
 
@@ -346,7 +346,7 @@ x-rpc:
 	cfg, err := ParseRpcConfig(spec)
 	require.NoError(t, err)
 
-	infos := []SchemaInfo{{Spec: spec, Prefix: ""}}
+	infos := []SchemaInfo{{Kind: KindOpenAPI, Spec: spec, Prefix: ""}}
 	mappings, err := BuildRpcMappings(infos, cfg)
 	require.NoError(t, err)
 
@@ -394,7 +394,7 @@ x-rpc:
 	cfg, err := ParseRpcConfig(spec)
 	require.NoError(t, err)
 
-	infos := []SchemaInfo{{Spec: spec, Prefix: ""}}
+	infos := []SchemaInfo{{Kind: KindOpenAPI, Spec: spec, Prefix: ""}}
 	_, err = BuildRpcMappings(infos, cfg)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate")
@@ -434,7 +434,7 @@ x-rpc:
 	cfg, err := ParseRpcConfig(spec)
 	require.NoError(t, err)
 
-	infos := []SchemaInfo{{Spec: spec, Prefix: ""}}
+	infos := []SchemaInfo{{Kind: KindOpenAPI, Spec: spec, Prefix: ""}}
 	mappings, err := BuildRpcMappings(infos, cfg)
 	require.NoError(t, err)
 	assert.Empty(t, mappings)
@@ -463,7 +463,7 @@ x-rpc:
 	cfg, err := ParseRpcConfig(spec)
 	require.NoError(t, err)
 
-	infos := []SchemaInfo{{Spec: spec, Prefix: "/api"}}
+	infos := []SchemaInfo{{Kind: KindOpenAPI, Spec: spec, Prefix: "/api"}}
 	mappings, err := BuildRpcMappings(infos, cfg)
 	require.NoError(t, err)
 
@@ -518,7 +518,7 @@ x-rpc:
 	cfg, err := ParseRpcConfig(spec)
 	require.NoError(t, err)
 
-	infos := []SchemaInfo{{Spec: spec, Prefix: ""}}
+	infos := []SchemaInfo{{Kind: KindOpenAPI, Spec: spec, Prefix: ""}}
 
 	// Regular route mappings include everything
 	routeMappings, err := BuildRouteMappings(infos)

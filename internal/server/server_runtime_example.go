@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"sync"
 
@@ -97,6 +96,5 @@ func (s *Server) handleDeleteExample(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "unknown exampleId")
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }

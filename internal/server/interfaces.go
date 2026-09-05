@@ -1,13 +1,9 @@
 package server
 
-//go:generate mockgen -destination=interfaces_mock_test.go -package=server . RouteProvider,StateStore,HistoryStore,DataSource,RequestSourceFactory,StateSourceFactory,EnvSourceFactory,ExpressionEvaluator,ExtensionProcessor,RpcProtocol
+//go:generate mockgen -destination=interfaces_mock_test.go -package=server . RouteProvider,StateStore,HistoryStore,RpcProtocol
 
 import (
-	"net/http"
-	"time"
-
-	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/mamonth/oasmock/internal/asyncapi"
+	"github.com/mamonth/oasmock/internal/history"
 	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/mamonth/oasmock/internal/runtime"
 )
@@ -18,31 +14,14 @@ type RouteProvider interface {
 	BuildRouteMappings(schemas []SchemaInfo) ([]RouteMapping, error)
 }
 
-// RouteMapping represents a route mapping for a single OpenAPI operation or
-// AsyncAPI channel/operation.
-type RouteMapping struct {
-	Method     string
-	Path       string // The full path pattern with prefix (e.g., "/v1/users/{id}")
-	Pattern    string // The path pattern without prefix (e.g., "/users/{id}")
-	Prefix     string // The prefix for this route (e.g., "/v1")
-	ChiPattern string // Path converted to Chi pattern (e.g., "/v1/users/:id")
-	Operation  *openapi3.Operation
-	Parameters openapi3.Parameters
-	Responses  *openapi3.Responses
+// RouteMapping is a route mapping for a single OpenAPI operation or AsyncAPI
+// channel/operation. It aliases loader.RouteMapping so the server never owns a
+// mirror copy of the loader's routing model (single source of truth).
+type RouteMapping = loader.RouteMapping
 
-	// AsyncAPI-specific route data.
-	Protocol string                // "http" | "ws" | ""
-	Action   string                // "send" | "receive" | ""
-	Messages []*loader.MessageSpec // AsyncAPI-backed message specs
-}
-
-// SchemaInfo holds a loaded spec (OpenAPI or AsyncAPI) and its path prefix.
-type SchemaInfo struct {
-	Spec   *openapi3.T
-	Kind   loader.Kind
-	Async  *asyncapi.Document
-	Prefix string
-}
+// SchemaInfo holds a loaded spec (OpenAPI or AsyncAPI) and its path prefix. It
+// aliases loader.SchemaInfo; the server consumes the loader's model directly.
+type SchemaInfo = loader.SchemaInfo
 
 // StateStore manages state per namespace.
 type StateStore interface {
@@ -76,81 +55,41 @@ type HistoryStore interface {
 	Clear()
 }
 
-// RequestRecord captures details of an HTTP request served by the mock.
-type RequestRecord struct {
-	ID        string          `json:"id"`
-	Timestamp time.Time       `json:"timestamp"`
-	Method    string          `json:"method"`
-	Path      string          `json:"path"`
-	Query     string          `json:"query,omitempty"`
-	Headers   http.Header     `json:"headers"`
-	Body      []byte          `json:"body,omitempty"`
-	Response  *ResponseRecord `json:"response,omitempty"`
-}
+// RequestRecord captures details of an HTTP request served by the mock. It
+// aliases history.RequestRecord so the server and store share one record type.
+type RequestRecord = history.RequestRecord
 
-// ResponseRecord captures details of the HTTP response.
-type ResponseRecord struct {
-	StatusCode int           `json:"statusCode"`
-	Headers    http.Header   `json:"headers"`
-	Body       []byte        `json:"body,omitempty"`
-	Duration   time.Duration `json:"duration"`
-}
-
-// DataSource represents a source of data for runtime expressions.
-type DataSource interface {
-	// Get retrieves a value from the data source by path.
-	// Path is a dot-separated string (e.g., "path.id", "query.page").
-	// Returns the value and true if found, nil and false otherwise.
-	Get(path string) (any, bool)
-}
-
-// RequestSourceFactory creates DataSource instances for HTTP requests.
-type RequestSourceFactory interface {
-	// NewRequestSource creates a DataSource from an HTTP request and path parameters.
-	NewRequestSource(r *http.Request, pathParams map[string]string) DataSource
-}
-
-// StateSourceFactory creates DataSource instances for state.
-type StateSourceFactory interface {
-	// NewStateSource creates a DataSource for the given namespace.
-	NewStateSource(namespace string) DataSource
-}
-
-// EnvSourceFactory creates DataSource instances for environment variables.
-type EnvSourceFactory interface {
-	// NewEnvSource creates a DataSource for environment variables.
-	NewEnvSource() DataSource
-}
-
-// ExpressionEvaluator evaluates runtime expressions.
-type ExpressionEvaluator interface {
-	// AddSource adds a data source with the given name.
-	AddSource(name string, source DataSource)
-	// Evaluate evaluates an expression and returns the result.
-	Evaluate(expr string) (any, error)
-}
-
-// ExtensionProcessor processes OpenAPI extensions.
-type ExtensionProcessor interface {
-	// ExtractSetState extracts x-mock-set-state extension from an example.
-	ExtractSetState(example *openapi3.Example) (map[string]any, bool)
-	// ExtractSkip extracts x-mock-skip extension from an example.
-	ExtractSkip(example *openapi3.Example) bool
-	// ExtractOnce extracts x-mock-once extension from an example.
-	ExtractOnce(example *openapi3.Example) bool
-	// ExtractParamsMatch extracts x-mock-params-match extension from an example.
-	ExtractParamsMatch(example *openapi3.Example) (map[string]any, bool)
-	// EvaluateParamsMatch evaluates a params match against an evaluator.
-	EvaluateParamsMatch(params map[string]any, eval ExpressionEvaluator) (bool, error)
-	// ExtractHeaders extracts x-mock-headers extension from an example.
-	ExtractHeaders(example *openapi3.Example) (map[string]any, bool)
-}
+// ResponseRecord captures details of the HTTP response. It aliases
+// history.ResponseRecord.
+type ResponseRecord = history.ResponseRecord
 
 // RpcProtocol parses RPC request bodies and formats error responses.
 type RpcProtocol interface {
-	ParseBody(body []byte) ([]RpcCall, error)
+	// ParseBody parses a request body into an ordered sequence of entries. A
+	// valid call yields an entry with Call set; a malformed batch element
+	// yields an entry with Error set (code -32600) and does not abort the
+	// other elements. It returns a fatal error only when the body itself is
+	// unparseable JSON or is neither an object nor an array; the error carries
+	// a JSON-RPC code (see rpcErrorCode).
+	ParseBody(body []byte) ([]RpcEntry, error)
 	ErrorResponse(code int, message string, id any) []byte
 	ContentType() string
+}
+
+// RpcEntry is one slot of a parsed JSON-RPC body: either a valid call or a
+// per-element protocol error, preserving the request order for batch responses.
+type RpcEntry struct {
+	Call  *RpcCall        // non-nil for a valid call
+	Error *RpcParsedError // non-nil for a malformed element
+}
+
+// RpcParsedError is a per-element JSON-RPC error captured during batch
+// parsing (for example a batch element missing the jsonrpc or method field).
+// Per the JSON-RPC 2.0 spec, a malformed element is answered with -32600 and
+// does not abort the other elements.
+type RpcParsedError struct {
+	Code int
+	ID   any
 }
 
 // RpcCall represents a single parsed RPC call.
@@ -161,16 +100,13 @@ type RpcCall struct {
 	HasID     bool
 }
 
-// Dependencies holds all dependencies for the Server.
+// Dependencies holds all dependencies for the Server. Only the stores and the
+// route provider are injected; the example engine owns runtime-expression
+// evaluation, data-source construction and extension processing directly.
 type Dependencies struct {
-	RouteProvider        RouteProvider
-	StateStore           StateStore
-	HistoryStore         HistoryStore
-	RequestSourceFactory RequestSourceFactory
-	StateSourceFactory   StateSourceFactory
-	EnvSourceFactory     EnvSourceFactory
-	ExpressionEvaluator  ExpressionEvaluator
-	ExtensionProcessor   ExtensionProcessor
+	RouteProvider RouteProvider
+	StateStore    StateStore
+	HistoryStore  HistoryStore
 }
 
 // MessageRenderer is the message-rendering surface consumed by the SignalR

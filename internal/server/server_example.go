@@ -2,7 +2,6 @@ package server
 
 import (
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/mamonth/oasmock/internal/runtime"
 )
 
@@ -42,9 +41,3 @@ func (s *Server) markOnceUsed(id string) { s.registry.markOnceUsed(id) }
 
 // isOnceUsed checks if an example has been used.
 func (s *Server) isOnceUsed(id string) bool { return s.registry.isOnceUsed(id) }
-
-func getStatusCode(mapping *loader.RouteMapping, response *openapi3.Response) int {
-	// TODO: parse status code from mapping (key in Responses map)
-	// For now, default to 200
-	return 200
-}
