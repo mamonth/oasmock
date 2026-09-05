@@ -79,15 +79,15 @@ func TestSignalRHub_TokenCorrelation(t *testing.T) {
 	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	hub := newSignalRHubAtPath(srv, "/hub", "", nil)
 
-	token, connID := hub.issueToken()
+	token, connID := hub.conns.issueToken()
 	require.NotEmpty(t, token)
 	require.NotEmpty(t, connID)
 
-	gotConnID, ok := hub.consumeToken(token)
+	gotConnID, ok := hub.conns.consumeToken(token)
 	assert.True(t, ok, "issued token must correlate with its connection id")
 	assert.Equal(t, connID, gotConnID)
 	// The token is consumed on correlation, so it cannot be reused.
-	_, ok = hub.consumeToken(token)
+	_, ok = hub.conns.consumeToken(token)
 	assert.False(t, ok, "consumed token must not correlate again")
 }
 
@@ -105,11 +105,11 @@ func TestSignalRHub_FreshToken(t *testing.T) {
 	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	hub := newSignalRHubAtPath(srv, "/hub", "", nil)
 
-	token, connID := hub.freshToken()
+	token, connID := hub.conns.freshToken()
 	require.NotEmpty(t, token)
 	require.NotEmpty(t, connID)
 	// A fresh token is not correlated until an upgrade presents it.
-	_, ok := hub.consumeToken(token)
+	_, ok := hub.conns.consumeToken(token)
 	assert.False(t, ok, "fresh token is not yet correlated")
 }
 
@@ -239,7 +239,6 @@ func TestHubManager_CandidatesDeduplicatesStreams(t *testing.T) {
 	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	hub := newSignalRHubAtPath(srv, "/hub", "", nil)
 	hub.channels["priceFeed"] = &asyncapi.Channel{ID: "priceFeed", Address: "/price"}
-	hub.mu.Lock()
 	sc := &signalRConnection{
 		id:      "signalr-1",
 		writer:  newWSWriter(nil),
@@ -247,8 +246,7 @@ func TestHubManager_CandidatesDeduplicatesStreams(t *testing.T) {
 	}
 	sc.streams["inv-1"] = &signalRStream{invocationID: "inv-1", channelID: "priceFeed", connID: "signalr-1"}
 	sc.streams["inv-2"] = &signalRStream{invocationID: "inv-2", channelID: "priceFeed", connID: "signalr-1"}
-	hub.conns["signalr-1"] = sc
-	hub.mu.Unlock()
+	hub.conns.register(sc)
 
 	mgr := &hubManager{hubs: []*signalRHub{hub}}
 	candidates := mgr.Candidates("/price")
@@ -278,15 +276,13 @@ func TestSignalRHub_OpenStreamsForChannel(t *testing.T) {
 		streams: make(map[string]*signalRStream),
 	}
 	sc.streams["inv-1"] = &signalRStream{invocationID: "inv-1", channelID: "priceFeed", connID: "signalr-1"}
-	hub.mu.Lock()
-	hub.conns["signalr-1"] = sc
-	hub.mu.Unlock()
+	hub.conns.register(sc)
 
-	streams := hub.openStreamsForChannel("priceFeed")
+	streams := hub.conns.openStreamsForChannel("priceFeed")
 	require.Len(t, streams, 1)
 	assert.Equal(t, "signalr-1", streams[0]["connectionId"])
 	assert.Equal(t, "inv-1", streams[0]["invocationId"])
 	assert.Equal(t, "priceFeed", streams[0]["streamId"])
 
-	assert.Empty(t, hub.openStreamsForChannel("otherChannel"))
+	assert.Empty(t, hub.conns.openStreamsForChannel("otherChannel"))
 }

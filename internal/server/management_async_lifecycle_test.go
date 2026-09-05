@@ -303,15 +303,13 @@ func TestPushEndpoint_TargetedSignalR(t *testing.T) {
 	require.NoError(t, err) // handshake reply
 
 	hub := srv.hubMgr.hubs[0]
-	hub.mu.Lock()
 	var streamConnID string
-	for id, sc := range hub.conns {
+	for id, sc := range hub.conns.connections() {
 		if len(sc.streams) > 0 {
 			streamConnID = id
 			break
 		}
 	}
-	hub.mu.Unlock()
 	require.NotEmpty(t, streamConnID)
 
 	body := `{"channel":"/priceFeed","connectionId":"` + streamConnID + `","payload":{"seq":1}}`

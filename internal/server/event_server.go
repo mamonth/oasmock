@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/mamonth/oasmock/internal/asyncapi"
@@ -12,58 +11,39 @@ import (
 	"github.com/mamonth/oasmock/internal/loader"
 )
 
-// eventBus is the pure-fabrication coordinator behind the event driver
-// (design D8). It owns the event broker and renders + delivers subscribed
-// messages through the MessageRenderer and ConsumerBus contracts, so it never
-// reaches into Server.
+// eventBus orchestrates the event driver (design D8). It owns the subscription
+// broker and the interval scheduler, and delegates message rendering/delivery
+// to the messageDelivery engine. It never reaches into Server.
 type eventBus struct {
 	broker    *eventBroker
-	renderer  MessageRenderer
-	bus       ConsumerBus
 	scheduler *jobScheduler
+	delivery  *messageDelivery
 	verbose   bool
-	// wait sleeps for a delayed emission (design D4/D5); injectable so tests
-	// stay hermetic.
-	wait func(time.Duration)
-	// observer, when set, is invoked with every emitted envelope so the
-	// management stream can mirror fired events and deliveries (RS.AMG.24-25).
+	// observer, when set, is invoked with event and schedule envelopes so the
+	// management stream can mirror fired events and job lifecycle. Push
+	// envelopes are emitted by the delivery engine (RS.AMG.24-27).
 	observer func(env manageEnvelope)
-	// done is closed on shutdown so pending delayed emissions no longer run.
-	done    chan struct{}
-	stopOne sync.Once
 }
 
-// doneChannel returns the bus shutdown signal so callers that schedule work on
-// their own goroutines (e.g. delayed management pushes) can cancel it when the
-// bus shuts down.
-func (b *eventBus) doneChannel() <-chan struct{} {
-	if b == nil {
-		ch := make(chan struct{})
-		close(ch)
-		return ch
-	}
-	return b.done
-}
-
-// setObserver installs the management-stream observer.
+// setObserver installs the management-stream observer on the bus and the
+// delivery engine (pushes).
 func (b *eventBus) setObserver(observer func(env manageEnvelope)) {
 	b.observer = observer
+	b.delivery.setObserver(observer)
 }
 
-// newEventBus wires a broker whose delivery goes through the renderer and
-// consumer bus.
+// newEventBus wires a broker whose delivery goes through the messageDelivery
+// engine, plus an interval scheduler.
 func newEventBus(renderer MessageRenderer, bus ConsumerBus, verbose bool) *eventBus {
+	delivery := newMessageDelivery(renderer, bus, verbose)
 	b := &eventBus{
-		renderer:  renderer,
-		bus:       bus,
 		scheduler: newJobScheduler(),
+		delivery:  delivery,
 		verbose:   verbose,
-		wait:      time.Sleep,
-		done:      make(chan struct{}),
 	}
 	b.broker = &eventBroker{
 		byEvent: make(map[string][]channelSubscription),
-		deliver: b.deliver,
+		deliver: delivery.deliver,
 		done:    make(chan struct{}),
 	}
 	return b
@@ -100,8 +80,20 @@ func (b *eventBus) fireTargeted(name string, payload map[string]any, firingSchem
 		return
 	}
 	for _, sub := range subs {
-		b.deliverTargeted(sub, payload, recipient)
+		b.delivery.deliverTargeted(sub, payload, recipient)
 	}
+}
+
+// doneChannel returns the bus shutdown signal so callers that schedule work on
+// their own goroutines (e.g. delayed management pushes) can cancel it when the
+// bus shuts down.
+func (b *eventBus) doneChannel() <-chan struct{} {
+	if b == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return b.delivery.doneChannel()
 }
 
 // hasSubscribers reports whether any event-driven example could match an
@@ -111,13 +103,15 @@ func (b *eventBus) hasSubscribers(name, schema string) bool {
 }
 
 // shutdown cancels all periodic interval jobs and cancels pending delayed
-// emissions so no delivery happens after shutdown.
+// emissions (broker and delivery) so no delivery happens after shutdown.
 func (b *eventBus) shutdown() {
-	if b == nil || b.scheduler == nil {
+	if b == nil {
 		return
 	}
-	b.scheduler.shutdown()
-	b.stopOne.Do(func() { close(b.done) })
+	if b.scheduler != nil {
+		b.scheduler.shutdown()
+	}
+	b.delivery.shutdown()
 	b.broker.stop()
 }
 
@@ -289,7 +283,7 @@ func (b *eventBus) registerPeriodic(address, prefix, exampleID string, spec *loa
 		exampleID: exampleID,
 		channel:   address,
 		deliver: func() {
-			b.deliverPeriodic(address, prefix, spec, opID)
+			b.delivery.deliverPeriodic(address, prefix, spec, opID)
 		},
 	})
 	go b.scheduler.run(job)
@@ -318,19 +312,6 @@ func (b *eventBus) removeIntervalJob(jobID string) {
 		}
 		b.observer(env)
 	}
-}
-
-// deliverPeriodic renders a periodically driven example against current state
-// and environment and broadcasts it to the channel's consumers.
-func (b *eventBus) deliverPeriodic(address, prefix string, spec *loader.MessageExampleSpec, opID string) {
-	view := &MessageExampleView{spec: spec}
-	body := b.renderExample(view, b.stateEnvEvaluator(prefix), prefix, opID)
-	if body == nil {
-		return
-	}
-	b.notifyPush(address, "", body)
-	b.bus.SignalRPush(address, body)
-	b.bus.WSBroadcast(address, body)
 }
 
 // derivedExamples maps one spec example into the example specs to register.

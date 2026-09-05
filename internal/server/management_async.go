@@ -178,7 +178,7 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 		for _, hub := range s.hubMgr.hubs {
 			for channelID := range hub.channels {
 				address := asyncAddressWithPrefix(hub.prefix, hub.channels[channelID].Address)
-				for _, st := range hub.openStreamsForChannel(channelID) {
+				for _, st := range hub.conns.openStreamsForChannel(channelID) {
 					consumers = append(consumers, consumerInfo{
 						ConnectionID: st["connectionId"],
 						Channel:      address,
@@ -189,7 +189,7 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if hub := s.hubForAddress(channel); hub != nil {
 		if id := matchingHubChannel(hub, channel); id != "" {
-			for _, st := range hub.openStreamsForChannel(id) {
+			for _, st := range hub.conns.openStreamsForChannel(id) {
 				consumers = append(consumers, consumerInfo{
 					ConnectionID: st["connectionId"],
 					Channel:      channel,
@@ -238,13 +238,11 @@ func (s *Server) handleAsyncDisconnect(w http.ResponseWriter, r *http.Request) {
 
 	// SignalR hub connection (RS.AMG.14-15).
 	for _, hub := range s.hubMgr.hubs {
-		hub.mu.Lock()
-		if sc, ok := hub.conns[req.ConnectionID]; ok {
-			hub.mu.Unlock()
+		if sc, ok := hub.conns.connection(req.ConnectionID); ok {
 			s.disconnectWS(sc.writer, req)
+			hub.conns.unregister(req.ConnectionID)
 			return
 		}
-		hub.mu.Unlock()
 	}
 
 	// Raw ws connection.
