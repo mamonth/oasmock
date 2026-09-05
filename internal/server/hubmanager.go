@@ -45,6 +45,22 @@ func (m *hubManager) hubForAddress(address string) *signalRHub {
 	return nil
 }
 
+// hubChannelForAddress finds the SignalR hub channel whose fully-prefixed
+// address matches, returning the hub and its channel id. It is the single
+// address-resolution point used by every delivery and discovery path.
+func (m *hubManager) hubChannelForAddress(address string) (*signalRHub, string) {
+	hub := m.hubForAddress(address)
+	if hub == nil {
+		return nil, ""
+	}
+	for channelID, ch := range hub.channels {
+		if asyncAddressWithPrefix(hub.prefix, ch.Address) == address {
+			return hub, channelID
+		}
+	}
+	return nil, ""
+}
+
 // hasConnection reports whether a connection id is active on any hub.
 func (m *hubManager) hasConnection(id string) bool {
 	for _, hub := range m.hubs {
@@ -61,14 +77,9 @@ func (m *hubManager) hasConnection(id string) bool {
 // SignalRPush emits a payload into a SignalR hub channel's open streams or as
 // a server invocation when none are open (ConsumerBus, RS.SHR.18-19).
 func (m *hubManager) SignalRPush(address string, payload []byte) {
-	hub := m.hubForAddress(address)
-	if hub == nil {
-		return
-	}
-	for channelID, ch := range hub.channels {
-		if asyncAddressWithPrefix(hub.prefix, ch.Address) == address {
-			hub.pushToStreams(channelID, payload, channelID)
-		}
+	hub, channelID := m.hubChannelForAddress(address)
+	if hub != nil {
+		hub.pushToStreams(channelID, payload, channelID)
 	}
 }
 
@@ -82,7 +93,11 @@ func (m *hubManager) WSBroadcast(address string, payload []byte) {
 }
 
 // Candidates returns every consumer of a channel address (raw ws and SignalR)
-// with the connection context captured at upgrade.
+// with the connection context captured at upgrade. SignalR candidates are
+// deduplicated per connection: a connection with several open streams on the
+// channel appears once, carrying all of its streams, so a per-connection
+// PushTo (which writes to every open stream) cannot duplicate delivery
+// quadratically (RS.SHR.22).
 func (m *hubManager) Candidates(address string) []ConsumerInfo {
 	var out []ConsumerInfo
 	if m.ws != nil {
@@ -95,20 +110,22 @@ func (m *hubManager) Candidates(address string) []ConsumerInfo {
 			})
 		}
 	}
-	if hub := m.hubForAddress(address); hub != nil {
-		for channelID, ch := range hub.channels {
-			if asyncAddressWithPrefix(hub.prefix, ch.Address) != address {
+	if hub, channelID := m.hubChannelForAddress(address); hub != nil {
+		seen := make(map[string]int) // connectionID -> index in out
+		for _, st := range hub.openStreamsForChannel(channelID) {
+			connID := st["connectionId"]
+			if idx, ok := seen[connID]; ok {
+				out[idx].Streams = append(out[idx].Streams, st)
 				continue
 			}
-			for _, st := range hub.openStreamsForChannel(channelID) {
-				out = append(out, ConsumerInfo{
-					ConnectionID: st["connectionId"],
-					Channel:      address,
-					Query:        hub.connectionMetadata(st["connectionId"]),
-					Headers:      hub.connectionHeaders(st["connectionId"]),
-					Streams:      []map[string]string{st},
-				})
-			}
+			seen[connID] = len(out)
+			out = append(out, ConsumerInfo{
+				ConnectionID: connID,
+				Channel:      address,
+				Query:        hub.connectionMetadata(connID),
+				Headers:      hub.connectionHeaders(connID),
+				Streams:      []map[string]string{st},
+			})
 		}
 	}
 	return out
@@ -145,15 +162,9 @@ func (m *hubManager) PushTo(consumer ConsumerInfo, address string, payload []byt
 			return
 		}
 	}
-	hub := m.hubForAddress(address)
+	hub, channelID := m.hubChannelForAddress(address)
 	if hub == nil {
 		return
 	}
-	for channelID, ch := range hub.channels {
-		if asyncAddressWithPrefix(hub.prefix, ch.Address) != address {
-			continue
-		}
-		hub.pushToConnection(consumer.ConnectionID, channelID, payload, channelID)
-		return
-	}
+	hub.pushToConnection(consumer.ConnectionID, channelID, payload, channelID)
 }

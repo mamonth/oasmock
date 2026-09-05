@@ -1,7 +1,6 @@
 package state
 
 import (
-	"maps"
 	"sync"
 )
 
@@ -101,7 +100,8 @@ func (m *Manager) ClearNamespace(namespace string) {
 	delete(m.state, namespace)
 }
 
-// GetNamespace returns a copy of all state for a namespace.
+// GetNamespace returns a deep copy of all state for a namespace. Mutating the
+// returned map, or any nested map/slice value, never affects live state.
 func (m *Manager) GetNamespace(namespace string) map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -109,16 +109,43 @@ func (m *Manager) GetNamespace(namespace string) map[string]any {
 	if !ok {
 		return nil
 	}
-	return maps.Clone(ns)
+	return deepCopyMap(ns)
 }
 
-// GetAll returns a copy of all state (for debugging).
+// GetAll returns a deep copy of all state (for debugging). Mutating the
+// returned structure, including nested values, never affects live state.
 func (m *Manager) GetAll() map[string]map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	copy := make(map[string]map[string]any, len(m.state))
 	for ns, kv := range m.state {
-		copy[ns] = maps.Clone(kv)
+		copy[ns] = deepCopyMap(kv)
 	}
 	return copy
+}
+
+// deepCopyMap returns a structural deep copy of a JSON-serializable value map.
+func deepCopyMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = deepCopyValue(v)
+	}
+	return out
+}
+
+// deepCopyValue recursively copies JSON-serializable values so callers cannot
+// alias (and later mutate) maps or slices held in live state.
+func deepCopyValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return deepCopyMap(t)
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = deepCopyValue(e)
+		}
+		return out
+	default:
+		return v
+	}
 }

@@ -468,7 +468,7 @@ func TestServerCORSHeadersPresent(t *testing.T) {
 	}
 
 	// Make a request with Origin header to trigger CORS
-	req, err := http.NewRequest("GET", fmt.Sprintf("http://localhost:%d/users", port), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%d/users", port), nil)
 	require.NoError(t, err, "failed to create request")
 	req.Header.Set("Origin", "http://example.com")
 	resp, err := http.DefaultClient.Do(req)

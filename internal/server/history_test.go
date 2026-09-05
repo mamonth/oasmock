@@ -19,7 +19,7 @@ Related spec scenarios: RS.ATM.15
 func TestServer_RecordAsyncExchange(t *testing.T) {
 	t.Parallel()
 
-	srv, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 
 	// Use a real ring buffer behind the mock to observe the Add.
 	realStore := newHistoryRingBufferStore(history.NewRingBuffer(32))
@@ -52,7 +52,7 @@ Related spec scenarios: RS.ATM.15
 func TestServer_RecordAsyncExchange_NoResponse(t *testing.T) {
 	t.Parallel()
 
-	srv, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	realStore := newHistoryRingBufferStore(history.NewRingBuffer(32))
 	srv.historyStore = realStore
 	srv.engine.historyStore = realStore

@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"net/http"
+
+	"github.com/mamonth/oasmock/internal/asyncapi"
 )
 
 // InboundMessage is a message received from a client on an AsyncAPI channel.
@@ -45,15 +47,15 @@ type ProtocolAdapter interface {
 // defaultProtocolAdapters is the set of adapters seeded for a new server.
 func defaultProtocolAdapters() map[string]ProtocolAdapter {
 	return map[string]ProtocolAdapter{
-		asyncHTTPProtocol: &httpProtocolAdapter{},
-		asyncWSProtocol:   newWSProtocolAdapter(),
+		asyncapi.ProtocolHTTP: &httpProtocolAdapter{},
+		asyncapi.ProtocolWS:   newWSProtocolAdapter(),
 	}
 }
 
 // wsRegistry returns the ws protocol adapter's connection registry, or nil
 // when the ws adapter is not registered.
 func (s *Server) wsRegistry() *connectionRegistry {
-	if a, ok := s.protocolAdapters[asyncWSProtocol].(*wsProtocolAdapter); ok && a != nil {
+	if a, ok := s.protocolAdapters[asyncapi.ProtocolWS].(*wsProtocolAdapter); ok && a != nil {
 		return a.registry
 	}
 	return nil
@@ -63,8 +65,3 @@ func (s *Server) wsRegistry() *connectionRegistry {
 func (s *Server) adapterForProtocol(protocol string) ProtocolAdapter {
 	return s.protocolAdapters[protocol]
 }
-
-const (
-	asyncHTTPProtocol = "http"
-	asyncWSProtocol   = "ws"
-)

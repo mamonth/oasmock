@@ -30,13 +30,15 @@ func TestJsonRpcProtocol_ParseBody_SingleCall(t *testing.T) {
 	proto := newTestProto("method")
 	body := []byte(`{"jsonrpc":"2.0","method":"subtract","params":{"a":10},"id":1}`)
 
-	calls, err := proto.ParseBody(body)
+	entries, err := proto.ParseBody(body)
 	require.NoError(t, err)
-	require.Len(t, calls, 1)
+	require.Len(t, entries, 1)
+	call := entries[0].Call
+	require.NotNil(t, call)
 
-	assert.Equal(t, "subtract", calls[0].Procedure)
-	assert.Equal(t, float64(1), calls[0].ID)
-	assert.True(t, calls[0].HasID)
+	assert.Equal(t, "subtract", call.Procedure)
+	assert.Equal(t, float64(1), call.ID)
+	assert.True(t, call.HasID)
 }
 
 /*
@@ -53,9 +55,12 @@ func TestJsonRpcProtocol_ParseBody_Batch(t *testing.T) {
 	proto := newTestProto("method")
 	body := []byte(`[{"jsonrpc":"2.0","method":"add","params":{"a":1},"id":1},{"jsonrpc":"2.0","method":"sub","params":{"a":2},"id":2},{"jsonrpc":"2.0","method":"mul","params":{"a":3},"id":3}]`)
 
-	calls, err := proto.ParseBody(body)
+	entries, err := proto.ParseBody(body)
 	require.NoError(t, err)
-	assert.Len(t, calls, 3)
+	assert.Len(t, entries, 3)
+	for _, e := range entries {
+		assert.NotNil(t, e.Call)
+	}
 }
 
 /*
@@ -72,13 +77,15 @@ func TestJsonRpcProtocol_ParseBody_Notification(t *testing.T) {
 	proto := newTestProto("method")
 	body := []byte(`{"jsonrpc":"2.0","method":"log","params":{"msg":"hello"}}`)
 
-	calls, err := proto.ParseBody(body)
+	entries, err := proto.ParseBody(body)
 	require.NoError(t, err)
-	require.Len(t, calls, 1)
+	require.Len(t, entries, 1)
+	call := entries[0].Call
+	require.NotNil(t, call)
 
-	assert.False(t, calls[0].HasID)
-	assert.Nil(t, calls[0].ID)
-	assert.Equal(t, "log", calls[0].Procedure)
+	assert.False(t, call.HasID)
+	assert.Nil(t, call.ID)
+	assert.Equal(t, "log", call.Procedure)
 }
 
 /*
@@ -95,12 +102,14 @@ func TestJsonRpcProtocol_ParseBody_NullId(t *testing.T) {
 	proto := newTestProto("method")
 	body := []byte(`{"jsonrpc":"2.0","method":"notify","id":null}`)
 
-	calls, err := proto.ParseBody(body)
+	entries, err := proto.ParseBody(body)
 	require.NoError(t, err)
-	require.Len(t, calls, 1)
+	require.Len(t, entries, 1)
+	call := entries[0].Call
+	require.NotNil(t, call)
 
-	assert.False(t, calls[0].HasID)
-	assert.Nil(t, calls[0].ID)
+	assert.False(t, call.HasID)
+	assert.Nil(t, call.ID)
 }
 
 /*
@@ -122,7 +131,128 @@ func TestJsonRpcProtocol_ParseBody_InvalidJSON(t *testing.T) {
 }
 
 /*
-Scenario: JsonRpcProtocol.ParseBody returns error on missing jsonrpc field
+Scenario: JsonRpcProtocol.ParseBody reports error code -32600 for missing jsonrpc
+Given a JsonRpcProtocol
+When ParseBody is called with a valid JSON object but missing jsonrpc
+Then it returns a typed error whose code is -32600 Invalid Request
+
+Related spec scenarios: RS.JRP.13
+*/
+func TestJsonRpcProtocol_ParseBody_MissingJsonrpc_Code(t *testing.T) {
+	t.Parallel()
+
+	proto := newTestProto("method")
+	body := []byte(`{"method":"sub","id":1}`)
+
+	_, err := proto.ParseBody(body)
+	require.Error(t, err)
+	assert.Equal(t, -32600, rpcErrorCode(err))
+}
+
+/*
+Scenario: JsonRpcProtocol.ParseBody reports -32600 for missing method
+Given a JsonRpcProtocol
+When ParseBody is called with jsonrpc: "2.0" but no method field
+Then it returns a typed error whose code is -32600 Invalid Request
+
+Related spec scenarios: RS.JRP.14
+*/
+func TestJsonRpcProtocol_ParseBody_MissingMethod_Code(t *testing.T) {
+	t.Parallel()
+
+	proto := newTestProto("method")
+	body := []byte(`{"jsonrpc":"2.0","id":1}`)
+
+	_, err := proto.ParseBody(body)
+	require.Error(t, err)
+	assert.Equal(t, -32600, rpcErrorCode(err))
+}
+
+/*
+Scenario: JsonRpcProtocol.ParseBody reports -32600 for wrong version
+Given a JsonRpcProtocol
+When ParseBody is called with jsonrpc: "1.0"
+Then it returns a typed error whose code is -32600 Invalid Request
+
+Related spec scenarios: RS.JRP.15
+*/
+func TestJsonRpcProtocol_ParseBody_WrongVersion_Code(t *testing.T) {
+	t.Parallel()
+
+	proto := newTestProto("method")
+	body := []byte(`{"jsonrpc":"1.0","method":"sub","id":1}`)
+
+	_, err := proto.ParseBody(body)
+	require.Error(t, err)
+	assert.Equal(t, -32600, rpcErrorCode(err))
+}
+
+/*
+Scenario: JsonRpcProtocol.ParseBody reports -32700 for malformed JSON
+Given a JsonRpcProtocol
+When ParseBody is called with invalid JSON
+Then it returns a typed error whose code is -32700 Parse error
+
+Related spec scenarios: RS.JRP.12
+*/
+func TestJsonRpcProtocol_ParseBody_InvalidJSON_Code(t *testing.T) {
+	t.Parallel()
+
+	proto := newTestProto("method")
+	body := []byte(`not json`)
+
+	_, err := proto.ParseBody(body)
+	require.Error(t, err)
+	assert.Equal(t, -32700, rpcErrorCode(err))
+}
+
+/*
+Scenario: JsonRpcProtocol.ParseBody rejects a top-level non-object/array
+Given a JsonRpcProtocol
+When ParseBody is called with a valid JSON scalar (e.g. 42)
+Then it returns a typed error whose code is -32600 Invalid Request
+
+Related spec scenarios: RS.JRP.33
+*/
+func TestJsonRpcProtocol_ParseBody_ScalarBody_Code(t *testing.T) {
+	t.Parallel()
+
+	proto := newTestProto("method")
+	body := []byte(`42`)
+
+	_, err := proto.ParseBody(body)
+	require.Error(t, err)
+	assert.Equal(t, -32600, rpcErrorCode(err))
+}
+
+/*
+Scenario: JsonRpcProtocol.ParseBody handles batch with a malformed element
+Given a JsonRpcProtocol
+When ParseBody is called with a batch containing one malformed element
+Then the valid calls are returned and the malformed element yields an
+RpcParsedError with code -32600 instead of failing the whole batch
+
+Related spec scenarios: RS.JRP.33
+*/
+func TestJsonRpcProtocol_ParseBody_BatchMalformedElement(t *testing.T) {
+	t.Parallel()
+
+	proto := newTestProto("method")
+	body := []byte(`[{"jsonrpc":"2.0","method":"add","id":1},"not-an-object",{"jsonrpc":"1.0","method":"sub","id":2}]`)
+
+	entries, err := proto.ParseBody(body)
+	require.NoError(t, err, "one malformed batch element must not fail the whole batch")
+	require.Len(t, entries, 3, "batch order is preserved: 1 valid call + 2 errors")
+	require.NotNil(t, entries[0].Call, "first element is a valid call")
+	assert.Equal(t, "add", entries[0].Call.Procedure)
+	require.NotNil(t, entries[1].Error, "second element is a parse error")
+	assert.Equal(t, -32600, entries[1].Error.Code)
+	require.NotNil(t, entries[2].Error, "third element is a parse error")
+	assert.Equal(t, -32600, entries[2].Error.Code)
+}
+
+/*
+Scenario: JsonRpcProtocol.ParseBody handles error on missing jsonrpc field
 Given a JsonRpcProtocol
 When ParseBody is called with a valid JSON object but missing jsonrpc
 Then it returns an error
@@ -192,9 +322,9 @@ func TestJsonRpcProtocol_ParseBody_EmptyBatch(t *testing.T) {
 	proto := newTestProto("method")
 	body := []byte(`[]`)
 
-	calls, err := proto.ParseBody(body)
-	require.NoError(t, err)
-	assert.Empty(t, calls)
+	_, err := proto.ParseBody(body)
+	require.Error(t, err, "an empty batch is an Invalid Request per JSON-RPC 2.0")
+	assert.Equal(t, -32600, rpcErrorCode(err))
 }
 
 /*
@@ -211,11 +341,11 @@ func TestJsonRpcProtocol_ParseBody_CustomCallPath(t *testing.T) {
 	proto := newTestProto("custom.proc")
 	body := []byte(`{"jsonrpc":"2.0","method":"ignore","custom":{"proc":"subtract"},"id":1}`)
 
-	calls, err := proto.ParseBody(body)
+	entries, err := proto.ParseBody(body)
 	require.NoError(t, err)
-	require.Len(t, calls, 1)
-
-	assert.Equal(t, "subtract", calls[0].Procedure)
+	require.Len(t, entries, 1)
+	require.NotNil(t, entries[0].Call)
+	assert.Equal(t, "subtract", entries[0].Call.Procedure)
 }
 
 /*
@@ -311,6 +441,15 @@ func TestJsonRpcProtocol_ContentType(t *testing.T) {
 var _ RpcProtocol = (*JsonRpcProtocol)(nil)
 
 // Ensure loader.RpcConfig integration
+/*
+Scenario: Building a JSON-RPC protocol from a loader RpcConfig
+Given a loader.RpcConfig with a content type and procedure call path
+When NewJsonRpcProtocol is called
+Then the protocol exposes the configured content type and extracts the
+configured procedure path
+
+Related spec scenarios: RS.JRP.1
+*/
 func TestNewJsonRpcProtocol_FromConfig(t *testing.T) {
 	cfg := &loader.RpcConfig{
 		ContentType: "application/json",

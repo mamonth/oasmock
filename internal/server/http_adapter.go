@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/mamonth/oasmock/internal/asyncapi"
 )
 
 // httpProtocolAdapter serves AsyncAPI http channels by reusing the HTTP mock
@@ -11,7 +13,7 @@ import (
 type httpProtocolAdapter struct{}
 
 // Protocol implements ProtocolAdapter.
-func (a *httpProtocolAdapter) Protocol() string { return asyncHTTPProtocol }
+func (a *httpProtocolAdapter) Protocol() string { return asyncapi.ProtocolHTTP }
 
 // Handler builds the HTTP handler that renders an AsyncAPI http channel route.
 func (a *httpProtocolAdapter) Handler(mapping *RouteMapping, handler MessageHandler) http.HandlerFunc {

@@ -178,11 +178,13 @@ flowchart LR
   - `MessageHandler` - AsyncAPI message rendering via shared pipeline
   - `StateStore` - Manages namespaced state with CRUD operations
   - `HistoryStore` - Stores request/response history records
-  - `DataSource` - Generic data source for runtime expressions
-  - `ExpressionEvaluator` - Evaluates runtime expressions (`{$request.path.id}`)
-  - `ExtensionProcessor` - Processes OpenAPI extensions (`x-mock-*`)
+  - `RpcProtocol` - Parses JSON-RPC bodies and formats error responses (gateway)
   - `MessageRenderer` - Narrow rendering surface (engine) consumed by hub/event bus/adapters
   - `ConsumerBus` - Payload emission to SignalR streams + ws consumers (hub manager)
+  - **Note:** runtime-expression evaluation, data-source construction and
+    `x-mock-*` extension processing are owned by the example engine
+    (`internal/extensions`/`internal/runtime`) and are not exposed as server
+    interfaces.
 - **Responsibilities**:
   - HTTP request routing using Chi router
   - WebSocket upgrades and connection lifecycle
@@ -228,11 +230,14 @@ flowchart LR
   - `x-mock-once` - Use example only once
   - `x-mock-match` - Conditional example selection (legacy alias: `x-mock-params-match`)
   - `x-mock-headers` - Custom response headers
+  - `x-mock-interval` / `x-mock-delay` - Periodically driven / delayed example timing
   - `x-event-trigger` - Fire a named event from an OpenAPI example
+  - `x-send-events` - Legacy AsyncAPI event subscription mapping (deprecated shim)
 - **Functions**:
   - `ExtractSetState()`, `ExtractParamsMatch()`, `ExtractHeaders()`, `ExtractEventTriggers()`
   - `EvaluateParamsMatch()` - Uses Runtime.Evaluator for expression evaluation
   - `ExtractSkip()`, `ExtractOnce()`
+  - `ClassifyTrigger()` - classifies an example into event-driven / periodic / reply
   - `OpenAPIExampleValue()` / `NewExampleValue()` - source-agnostic wrappers
 - **Responsibilities**:
   - Extract extension values from OpenAPI and AsyncAPI examples
@@ -405,9 +410,10 @@ sequenceDiagram
     ServerNew-->>-CLI: *Server instance
 
     Note over CLI,HTTPServer: === Server Startup ===
-    CLI->>+ServerStart: Start() (goroutine)
-    ServerStart->>+HTTPServer: ListenAndServe()
-    HTTPServer-->>-ServerStart: Listening on port
+    CLI->>+ServerStart: Listen() (binds the port)
+    ServerStart-->>-CLI: Bound port (OS-assigned when --port 0)
+    CLI->>+ServerStart: Serve(listener) (goroutine)
+    ServerStart->>+HTTPServer: Serve(ln)
     ServerStart-->>-CLI: Server running
     CLI->>CLI: Wait for interrupt signal
     CLI-->>-User: Server ready message
@@ -601,32 +607,18 @@ type DataSource interface {
     Get(path string) (any, bool)
 }
 
-// ExpressionEvaluator evaluates runtime expressions
-type ExpressionEvaluator interface {
-    AddSource(name string, source DataSource)
-    Evaluate(expr string) (any, error)
-}
+// Runtime-expression evaluation, data-source construction and x-mock-*
+// extension processing are owned by the example engine (`internal/extensions`)
+// and are not dependency-injected interfaces. The engine's `MessageRenderer`
+// surface (below) is the narrow contract the async subsystems consume.
 
-// ExtensionProcessor processes OpenAPI extensions
-type ExtensionProcessor interface {
-    ExtractSetState(example *openapi3.Example) (map[string]any, bool)
-    ExtractSkip(example *openapi3.Example) bool
-    ExtractOnce(example *openapi3.Example) bool
-    ExtractParamsMatch(example *openapi3.Example) (map[string]any, bool)
-    EvaluateParamsMatch(params map[string]any, eval ExpressionEvaluator) (bool, error)
-    ExtractHeaders(example *openapi3.Example) (map[string]any, bool)
-}
-
-// Dependencies holds all dependencies for the Server
+// Dependencies holds all dependencies for the Server. Only the stores and the
+// route provider are injected; the example engine owns runtime-expression
+// evaluation, data-source construction and extension processing directly.
 type Dependencies struct {
-    RouteProvider        RouteProvider
-    StateStore           StateStore
-    HistoryStore         HistoryStore
-    RequestSourceFactory RequestSourceFactory
-    StateSourceFactory   StateSourceFactory
-    EnvSourceFactory     EnvSourceFactory
-    ExpressionEvaluator  ExpressionEvaluator
-    ExtensionProcessor   ExtensionProcessor
+    RouteProvider RouteProvider
+    StateStore    StateStore
+    HistoryStore  HistoryStore
 }
 ```
 

@@ -6,9 +6,48 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const validateOpenAPISpec = `
+openapi: 3.0.3
+info:
+  title: Validate API
+  version: 1.0.0
+paths:
+  /validate:
+    post:
+      operationId: validateIt
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [kind, count]
+                properties:
+                  kind:
+                    type: string
+                  count:
+                    type: integer
+                  tags:
+                    type: array
+                    items:
+                      type: string
+`
+
+func mustOpenAPISpec(t *testing.T, yamlSpec string) *openapi3.T {
+	t.Helper()
+	ldr := openapi3.NewLoader()
+	spec, err := ldr.LoadFromData([]byte(yamlSpec))
+	require.NoError(t, err)
+	require.NoError(t, spec.Validate(ldr.Context))
+	return spec
+}
 
 /*
 Scenario: Mixing sync and async targeting is rejected
@@ -257,4 +296,42 @@ func TestAddExampleValidation_ErrorEnvelopeIsValidJSON(t *testing.T) {
 		resp.Body.Close() //nolint:errcheck
 		require.NotEmpty(t, envelope["error"])
 	}
+}
+
+/*
+Scenario: Response body validation honors the validate flag
+Given an OpenAPI route whose response schema constrains the body
+When an add-example body violates the schema and validate is unset (default true)
+Then the server responds with HTTP 400
+When the same body is posted with validate: false
+Then the server accepts it
+
+Related spec scenarios: RS.MAPI.5
+*/
+func TestAddExampleValidation_ValidateFlag(t *testing.T) {
+	t.Parallel()
+
+	schemas := []loader.SchemaInfo{{Kind: loader.KindOpenAPI, Spec: mustOpenAPISpec(t, validateOpenAPISpec), Prefix: ""}}
+	srv, err := New(Config{HistorySize: DefaultHistorySize, EnableControlAPI: true}, schemas)
+	require.NoError(t, err)
+	ts := httptest.NewServer(srv.router)
+	defer ts.Close() //nolint:errcheck
+
+	// The /validate route's response schema requires body.kind to be a string
+	// and body.count to be an integer; body.tags to be an array of strings.
+	mismatched := `{"path":"/validate","method":"POST","response":{"code":200,"body":{"kind":42,"count":"oops"}}}`
+
+	resp := postExample(t, ts.URL, mismatched)
+	defer resp.Body.Close() //nolint:errcheck
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "validate defaults to true")
+
+	// Explicit opt-out.
+	resp2 := postExample(t, ts.URL, `{"path":"/validate","method":"POST","validate":false,"response":{"code":200,"body":{"kind":42,"count":"oops"}}}`)
+	defer resp2.Body.Close() //nolint:errcheck
+	assert.Equal(t, http.StatusOK, resp2.StatusCode, "validate:false must skip schema validation")
+
+	// A conforming body passes with validation on.
+	resp3 := postExample(t, ts.URL, `{"path":"/validate","method":"POST","response":{"code":200,"body":{"kind":"ok","count":1,"tags":["a"]}}}`)
+	defer resp3.Body.Close() //nolint:errcheck
+	assert.Equal(t, http.StatusOK, resp3.StatusCode, "a conforming body must pass validation")
 }

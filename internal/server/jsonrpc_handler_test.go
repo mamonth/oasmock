@@ -64,30 +64,10 @@ func newRpcHandlerWithMocks(t *testing.T) (*RpcHandler, *MockRpcProtocol, *Serve
 	historyStore := NewMockHistoryStore(ctrl)
 	historyStore.EXPECT().Add(gomock.Any()).AnyTimes()
 
-	expressionEvaluator := NewMockExpressionEvaluator(ctrl)
-	expressionEvaluator.EXPECT().AddSource(gomock.Any(), gomock.Any()).AnyTimes()
-	expressionEvaluator.EXPECT().Evaluate(gomock.Any()).Return("", nil).AnyTimes()
-
-	requestSourceFactory := NewMockRequestSourceFactory(ctrl)
-	requestSourceFactory.EXPECT().NewRequestSource(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-	stateSourceFactory := NewMockStateSourceFactory(ctrl)
-	stateSourceFactory.EXPECT().NewStateSource(gomock.Any()).Return(nil).AnyTimes()
-
-	envSourceFactory := NewMockEnvSourceFactory(ctrl)
-	envSourceFactory.EXPECT().NewEnvSource().Return(nil).AnyTimes()
-
-	extensionProcessor := NewMockExtensionProcessor(ctrl)
-
 	deps := Dependencies{
-		RouteProvider:        routeProvider,
-		StateStore:           stateStore,
-		HistoryStore:         historyStore,
-		RequestSourceFactory: requestSourceFactory,
-		StateSourceFactory:   stateSourceFactory,
-		EnvSourceFactory:     envSourceFactory,
-		ExpressionEvaluator:  expressionEvaluator,
-		ExtensionProcessor:   extensionProcessor,
+		RouteProvider: routeProvider,
+		StateStore:    stateStore,
+		HistoryStore:  historyStore,
 	}
 
 	server, err := NewWithDependencies(Config{Port: 0, HistorySize: 1000}, []SchemaInfo{}, deps, nil, nil)
@@ -124,9 +104,7 @@ func TestRpcHandler_SingleCall(t *testing.T) {
 	}
 	handler.procedureMap["subtract"] = mapping
 
-	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcCall{
-		{Procedure: "subtract", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "subtract", "id": float64(1)}, ID: float64(1), HasID: true},
-	}, nil)
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &RpcCall{Procedure: "subtract", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "subtract", "id": float64(1)}, ID: float64(1), HasID: true}}}, nil)
 	proto.EXPECT().ContentType().Return("application/json")
 
 	req := httptest.NewRequest(http.MethodPost, "/rpc", nil)
@@ -159,8 +137,8 @@ func TestRpcHandler_MethodNotFound(t *testing.T) {
 
 	errBody := []byte(`{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found"},"id":2}`)
 
-	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcCall{
-		{Procedure: "unknown", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "unknown", "id": float64(2)}, ID: float64(2), HasID: true},
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{
+		{Call: &RpcCall{Procedure: "unknown", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "unknown", "id": float64(2)}, ID: float64(2), HasID: true}},
 	}, nil)
 	proto.EXPECT().ErrorResponse(-32601, "Method not found", float64(2)).Return(errBody)
 	proto.EXPECT().ContentType().Return("application/json")
@@ -243,7 +221,7 @@ func TestRpcHandler_Batch(t *testing.T) {
 	callB := RpcCall{Procedure: "b", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "b", "id": float64(2)}, ID: float64(2), HasID: true}
 	callC := RpcCall{Procedure: "c", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "c", "id": float64(3)}, ID: float64(3), HasID: true}
 
-	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcCall{callA, callB, callC}, nil)
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &callA}, {Call: &callB}, {Call: &callC}}, nil)
 	proto.EXPECT().ContentType().Return("application/json")
 
 	req := httptest.NewRequest(http.MethodPost, "/rpc", strings.NewReader(`[{"jsonrpc":"2.0","method":"a","id":1}]`))
@@ -286,7 +264,7 @@ func TestRpcHandler_BatchWithNotification(t *testing.T) {
 	callA := RpcCall{Procedure: "a", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "a", "id": float64(1)}, ID: float64(1), HasID: true}
 	callN := RpcCall{Procedure: "notify", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "notify"}, ID: nil, HasID: false}
 
-	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcCall{callA, callN}, nil)
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &callA}, {Call: &callN}}, nil)
 	proto.EXPECT().ContentType().Return("application/json")
 
 	req := httptest.NewRequest(http.MethodPost, "/rpc", strings.NewReader(`[{"jsonrpc":"2.0","method":"a","id":1}]`))
@@ -329,8 +307,7 @@ func TestRpcHandler_AllNotifications(t *testing.T) {
 	call1 := RpcCall{Procedure: "n1", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "n1"}, ID: nil, HasID: false}
 	call2 := RpcCall{Procedure: "n2", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "n2"}, ID: nil, HasID: false}
 
-	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcCall{call1, call2}, nil)
-	proto.EXPECT().ContentType().Return("application/json")
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &call1}, {Call: &call2}}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/rpc", strings.NewReader(`[{"jsonrpc":"2.0","method":"n1"}]`))
 	w := httptest.NewRecorder()
@@ -338,12 +315,10 @@ func TestRpcHandler_AllNotifications(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	resp := w.Result()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var body []interface{}
-	err := json.NewDecoder(resp.Body).Decode(&body)
-	require.NoError(t, err)
-	assert.Empty(t, body)
+	// An all-notification batch answers 204 No Content (JSON-RPC 2.0 §6:
+	// a response is not returned for notifications).
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("Content-Type"))
 }
 
 /*
@@ -370,7 +345,7 @@ func TestRpcHandler_PerCallBody(t *testing.T) {
 
 	callA := RpcCall{Procedure: "a", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "a", "id": float64(1), "params": map[string]interface{}{"x": float64(10)}}, ID: float64(1), HasID: true}
 
-	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcCall{callA}, nil)
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &callA}}, nil)
 	proto.EXPECT().ContentType().Return("application/json")
 
 	req := httptest.NewRequest(http.MethodPost, "/rpc", nil)
@@ -406,7 +381,7 @@ func TestRpcHandler_SingleNotification(t *testing.T) {
 
 	call := RpcCall{Procedure: "notify", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "notify"}, ID: nil, HasID: false}
 
-	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcCall{call}, nil)
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &call}}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/rpc", nil)
 	w := httptest.NewRecorder()
@@ -440,7 +415,7 @@ func TestRpcHandler_ResponseHeaders(t *testing.T) {
 	handler.procedureMap["h"] = mapping
 
 	call := RpcCall{Procedure: "h", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "h", "id": float64(1)}, ID: float64(1), HasID: true}
-	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcCall{call}, nil)
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &call}}, nil)
 	proto.EXPECT().ContentType().Return("application/json")
 
 	req := httptest.NewRequest(http.MethodPost, "/rpc", nil)
@@ -475,10 +450,46 @@ func TestRpcHandler_ResponseStatusCode(t *testing.T) {
 	handler.procedureMap["s"] = mapping
 
 	call := RpcCall{Procedure: "s", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "s", "id": float64(1)}, ID: float64(1), HasID: true}
-	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcCall{call}, nil)
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &call}}, nil)
 	proto.EXPECT().ContentType().Return("application/json")
 
 	req := httptest.NewRequest(http.MethodPost, "/rpc", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+/*
+Scenario: RpcHandler extracts procedure path params from the request URL
+Given a procedure whose route is /rpc/users/{id} invoked at /rpc/users/123
+When ServeHTTP is called
+Then path param id=123 is captured against the procedure's own ChiPattern
+(even though the gateway route itself has no params)
+
+Related spec scenarios: RS.JRP.34
+*/
+func TestRpcHandler_ProcedurePathParams(t *testing.T) {
+	t.Parallel()
+
+	handler, proto, _ := newRpcHandlerWithMocks(t)
+
+	mapping := &RouteMapping{
+		Method:     "POST",
+		Path:       "/rpc/users/{id}",
+		Pattern:    "/rpc/users/{id}",
+		ChiPattern: "/rpc/users/{id}",
+		Responses:  createResponsesWithExample(),
+	}
+	handler.procedureMap["getUser"] = mapping
+
+	call := RpcCall{Procedure: "getUser", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "getUser", "id": float64(1)}, ID: float64(1), HasID: true}
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &call}}, nil)
+	proto.EXPECT().ContentType().Return("application/json")
+
+	req := httptest.NewRequest(http.MethodPost, "/rpc/users/123", nil)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 
+	"github.com/mamonth/oasmock/internal/asyncapi"
 	"github.com/mamonth/oasmock/internal/runtime"
 )
 
@@ -60,7 +61,7 @@ func (s *Server) wireBuiltInHooks() {
 			s.notifyConsumerLifecycle("disconnected", channel, ConsumerInfo{ConnectionID: connID, Channel: channel})
 		},
 	}
-	if adapter, ok := s.protocolAdapters[asyncWSProtocol].(*wsProtocolAdapter); ok && adapter != nil {
+	if adapter, ok := s.protocolAdapters[asyncapi.ProtocolWS].(*wsProtocolAdapter); ok && adapter != nil {
 		adapter.hooks = hookSet
 	}
 	for _, hub := range s.hubMgr.hubs {

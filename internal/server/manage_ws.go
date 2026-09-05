@@ -68,13 +68,17 @@ type manageStream struct {
 	mu      sync.RWMutex
 	subs    map[*wsWriter]*manageStreamSub
 	verbose bool
+	// readIdle bounds how long a subscriber may stay silent before being
+	// reaped from the registry (defaults to wsReadIdleBounds).
+	readIdle time.Duration
 }
 
 // newManageStream creates the management stream registry.
 func newManageStream(verbose bool) *manageStream {
 	return &manageStream{
-		subs:    make(map[*wsWriter]*manageStreamSub),
-		verbose: verbose,
+		subs:     make(map[*wsWriter]*manageStreamSub),
+		verbose:  verbose,
+		readIdle: wsReadIdleBounds,
 	}
 }
 
@@ -285,11 +289,20 @@ func (s *Server) handleManageStream(w http.ResponseWriter, r *http.Request) {
 	stopPings := make(chan struct{})
 	defer close(stopPings)
 	go servePings(wr, manageStreamPingInterval, stopPings)
+	// Bound the read loop so a silently-dead subscriber (half-open socket that
+	// stops sending peers) is reaped along with its registry entry instead of
+	// leaking the handler goroutine.
+	idle := s.manageStream.readIdle
+	if idle <= 0 {
+		idle = wsReadIdleBounds
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(idle))
 	for {
 		messageType, payload, rerr := conn.ReadMessage()
 		if rerr != nil {
 			return
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(idle))
 		if messageType == websocket.PingMessage {
 			wr.writeMessage(websocket.PongMessage, payload)
 			continue

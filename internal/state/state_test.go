@@ -232,6 +232,34 @@ func TestManagerGetNamespace(t *testing.T) {
 }
 
 /*
+Scenario: GetNamespace returns a deep copy, not a shallow one
+Given state containing a nested map value under a key
+When GetNamespace is called and the nested value is mutated
+Then live state is unchanged (deep copy), not aliased
+
+Related spec scenarios: RS.MSC.20
+*/
+func TestManagerGetNamespace_DeepCopy(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager()
+	m.Set("ns1", "user", map[string]any{"name": "alice", "tags": []any{"a", "b"}})
+
+	// Nested mutation on the returned copy must not reach live state.
+	ns := m.GetNamespace("ns1")
+	user, ok := ns["user"].(map[string]any)
+	require.True(t, ok)
+	user["name"] = "eve"
+	user["tags"].([]any)[0] = "hacked"
+
+	liveUser, _ := m.Get("ns1", "user")
+	live, ok := liveUser.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "alice", live["name"], "nested mutation must not affect live state")
+	assert.Equal(t, "a", live["tags"].([]any)[0], "nested slice mutation must not affect live state")
+}
+
+/*
 Scenario: Retrieving a copy of all state from manager
 Given a state manager with multiple namespaces and keys
 When a copy of all state is requested

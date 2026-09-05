@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mamonth/oasmock/internal/asyncapi"
 )
 
 // wsUpgrader upgrades incoming HTTP requests to WebSocket connections.
@@ -19,6 +20,12 @@ var wsUpgrader = websocket.Upgrader{
 	// The mock accepts connections from any origin.
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
+
+// wsReadIdleBounds is how long a consumer may go without sending any frame
+// before the connection is considered dead and the read loop exits. It bounds
+// the lifetime of silently-dead peers so their goroutines and registrations
+// are not leaked.
+const wsReadIdleBounds = 60 * time.Second
 
 // wsWriter serializes writes to a WebSocket connection. gorilla/websocket
 // permits a single writer goroutine; management pushes, event delivery and
@@ -31,26 +38,30 @@ type wsWriter struct {
 // newWSWriter wraps a connection so every write goes through its mutex.
 func newWSWriter(conn *websocket.Conn) *wsWriter { return &wsWriter{conn: conn} }
 
-// write sends a text frame, locking the connection's write mutex.
-func (w *wsWriter) write(data []byte) {
+// wsWriteDeadline bounds each write so a stalled peer does not block the
+// connection's writer forever.
+const wsWriteDeadline = 10 * time.Second
+
+// writeFrame serializes all writes behind the connection's write mutex (the
+// gorilla/websocket single-writer rule).
+func (w *wsWriter) writeFrame(messageType int, data []byte) {
 	if w == nil || w.conn == nil || len(data) == 0 {
 		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	_ = w.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_ = w.conn.WriteMessage(websocket.TextMessage, data)
+	_ = w.conn.SetWriteDeadline(time.Now().Add(wsWriteDeadline))
+	_ = w.conn.WriteMessage(messageType, data)
+}
+
+// write sends a text frame.
+func (w *wsWriter) write(data []byte) {
+	w.writeFrame(websocket.TextMessage, data)
 }
 
 // writeMessage sends a raw frame (used for pong replies).
 func (w *wsWriter) writeMessage(messageType int, data []byte) {
-	if w == nil || w.conn == nil {
-		return
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	_ = w.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_ = w.conn.WriteMessage(messageType, data)
+	w.writeFrame(messageType, data)
 }
 
 // writeError sends a JSON-encoded error object on the connection.
@@ -61,22 +72,13 @@ func (w *wsWriter) writeError(err error) {
 
 // writeClose sends a normal close frame with a reason.
 func (w *wsWriter) writeClose(code int, reason string) {
-	if w == nil || w.conn == nil {
-		return
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	msg := websocket.FormatCloseMessage(code, reason)
-	_ = w.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_ = w.conn.WriteMessage(websocket.CloseMessage, msg)
+	w.writeFrame(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason))
 }
 
-// abort closes the connection without a close frame (simulated abrupt drop, RS.AMG.17).
+// abort closes the connection without a close frame (simulated abrupt drop,
+// RS.AMG.17).
 func (w *wsWriter) abort() {
-	if w == nil || w.conn == nil {
-		return
-	}
-	_ = w.conn.Close()
+	w.close()
 }
 
 // close closes the connection.
@@ -223,7 +225,7 @@ func newWSProtocolAdapter() *wsProtocolAdapter {
 }
 
 // Protocol implements ProtocolAdapter.
-func (a *wsProtocolAdapter) Protocol() string { return asyncWSProtocol }
+func (a *wsProtocolAdapter) Protocol() string { return asyncapi.ProtocolWS }
 
 // Handler builds the WebSocket upgrade handler for an AsyncAPI ws channel.
 func (a *wsProtocolAdapter) Handler(mapping *RouteMapping, handler MessageHandler) http.HandlerFunc {
@@ -261,11 +263,15 @@ func (a *wsProtocolAdapter) Handler(mapping *RouteMapping, handler MessageHandle
 		}
 
 		// Read loop: send-operation acceptance + reply (RS.ASP.6, RS.ASP.9).
+		// The read deadline bails out of a silently-dead peer so the read-loop
+		// goroutine and the connection registration are not leaked.
+		_ = conn.SetReadDeadline(time.Now().Add(wsReadIdleBounds))
 		for {
 			messageType, payload, rerr := conn.ReadMessage()
 			if rerr != nil {
 				break
 			}
+			_ = conn.SetReadDeadline(time.Now().Add(wsReadIdleBounds))
 			if messageType == websocket.PingMessage {
 				wr.writeMessage(websocket.PongMessage, payload)
 				continue

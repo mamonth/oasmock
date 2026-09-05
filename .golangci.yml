@@ -1,0 +1,41 @@
+# golangci-lint configuration (v2 schema).
+# Run locally with: golangci-lint run
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - gocyclo
+    - gocognit
+    - dupl
+    - misspell
+    - whitespace
+    - thelper
+    - usestdlibvars
+    - errname
+  settings:
+    gocyclo:
+      # Project standard: keep every function under this cyclomatic bound.
+      min-complexity: 15
+    gocognit:
+      # Flag only deeply tangled functions (handlers and schema registrars
+      # legitimately branch on several states); small helpers are preferred.
+      min-complexity: 35
+    dupl:
+      threshold: 150
+  exclusions:
+    paths:
+      - mock/
+      - third_party/
+    rules:
+      # Integration test helpers build and launch the real binary; their JSON
+      # fixtures and server stubs resemble one another by design.
+      - path: test/
+        linters:
+          - dupl
+      - path: internal/server/.*_test\.go
+        linters:
+          - dupl

@@ -28,6 +28,10 @@ The mock server SHALL provide `POST /_mock/examples` to add a custom mock exampl
 - **WHEN** the request includes `validate: false`
 - **THEN** the server does not validate the example data against the OpenAPI schema
 
+#### Scenario RS.MAPI.34: Response body validation default
+- **WHEN** `validate` is omitted (defaults to true) and the response body does not match the route's OpenAPI schema
+- **THEN** the server responds with HTTP 400
+
 #### Scenario RS.MAPI.6: Invalid request body
 - **WHEN** the request body is missing required fields or malformed
 - **THEN** the server responds with HTTP 400

@@ -105,7 +105,11 @@ The mock server SHALL process batch JSON-RPC calls (array body) and return an ar
 
 #### Scenario RS.JRP.22: All-notification batch
 - **WHEN** all calls in a batch are notifications (no id)
-- **THEN** the response body is an empty JSON array `[]`
+- **THEN** the server answers HTTP 204 No Content (a response is not returned for notifications per JSON-RPC 2.0 §6)
+
+#### Scenario RS.JRP.33: Batch with a malformed element
+- **WHEN** a batch contains one element that is not an object, or is missing the jsonrpc/method field
+- **THEN** the valid elements are processed normally and the malformed element yields a `-32600` error slot in its position, without aborting the rest of the batch
 
 ### Requirement: JSON-RPC notification handling
 The mock server SHALL process notification calls (no `id`) for side effects without returning a response entry.
@@ -128,6 +132,10 @@ The mock server SHALL evaluate `{$request.body.*}` against the individual call o
 #### Scenario RS.JRP.26: Per-call body.params resolution
 - **WHEN** a batch includes two calls with different params objects
 - **THEN** each call's `x-mock-params-match` conditions evaluate against its own params object, not the batch array
+
+#### Scenario RS.JRP.34: Procedure path parameters resolve through the gateway
+- **WHEN** a procedure is backed by a route such as `/rpc/users/{id}` and the request URL is `/rpc/users/123`
+- **THEN** `{$request.path.id}` resolves to `123` (the params are extracted against the procedure's own route pattern, not the gateway route)
 
 ### Requirement: Extension compatibility
 All existing `x-mock-*` extensions SHALL work identically for JSON-RPC calls as for HTTP requests.

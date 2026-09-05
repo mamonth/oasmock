@@ -41,7 +41,7 @@ Related spec scenarios: RS.MSC.40, RS.MSC.41
 func TestSelectDynamicExampleExpiry(t *testing.T) {
 	t.Parallel()
 
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 	key := "GET /test"
 	server.registry.dynamicExamples = map[string][]dynamicExample{
 		key: {
@@ -68,7 +68,7 @@ Related spec scenarios: RS.MSC.42
 func TestSelectDynamicExampleZeroTTLNeverExpires(t *testing.T) {
 	t.Parallel()
 
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 	key := "GET /test"
 	server.registry.dynamicExamples = map[string][]dynamicExample{
 		key: {
@@ -94,7 +94,7 @@ Related spec scenarios: RS.MSC.43
 func TestSelectDynamicExampleOnceWithTTL(t *testing.T) {
 	t.Parallel()
 
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 	key := "GET /test"
 	ex := dynExample(3600, time.Now(), "once-ttl")
 	ex.once = true
@@ -122,7 +122,7 @@ Related spec scenarios: RS.MSC.44, RS.MSC.46
 func TestSweepExpiredExamples(t *testing.T) {
 	t.Parallel()
 
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 	server.registry.dynamicExamples = map[string][]dynamicExample{
 		"GET /a": {
 			dynExample(1, time.Now().Add(-2*time.Second), "expired"),
@@ -157,7 +157,7 @@ Related spec scenarios: RS.MSC.45
 func TestSweepExpiredExamplesCleansOnceExamples(t *testing.T) {
 	t.Parallel()
 
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 	key := "GET /test"
 	ex := dynExample(1, time.Now().Add(-2*time.Second), "once-expired")
 	ex.once = true
@@ -184,7 +184,7 @@ Related spec scenarios: RS.MSC.43
 func TestSweepDoesNotReuseConsumedOnceExample(t *testing.T) {
 	t.Parallel()
 
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 	key := "GET /test"
 
 	expired := dynExample(1, time.Now().Add(-2*time.Second), "expired-once")
@@ -249,7 +249,7 @@ func TestHandleAddExampleWithTTL(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+			server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 			server.mappings = []RouteMapping{{
 				Method:     "GET",
 				Path:       "/test",
@@ -258,7 +258,7 @@ func TestHandleAddExampleWithTTL(t *testing.T) {
 			}}
 			server.registry.dynamicExamples = make(map[string][]dynamicExample)
 
-			req := httptest.NewRequest("POST", "/_mock/examples", strings.NewReader(tt.reqBody))
+			req := httptest.NewRequest(http.MethodPost, "/_mock/examples", strings.NewReader(tt.reqBody))
 			w := httptest.NewRecorder()
 
 			server.handleAddExample(w, req)
@@ -291,7 +291,7 @@ Related spec scenarios: RS.MAPI.17
 func TestHandleAddExampleRejectsNegativeTTL(t *testing.T) {
 	t.Parallel()
 
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 	server.mappings = []RouteMapping{{
 		Method:     "GET",
 		Path:       "/test",
@@ -300,7 +300,7 @@ func TestHandleAddExampleRejectsNegativeTTL(t *testing.T) {
 	}}
 	server.registry.dynamicExamples = make(map[string][]dynamicExample)
 
-	req := httptest.NewRequest("POST", "/_mock/examples", strings.NewReader(`{"path":"/test","response":{"code":200},"ttl":-1}`))
+	req := httptest.NewRequest(http.MethodPost, "/_mock/examples", strings.NewReader(`{"path":"/test","response":{"code":200},"ttl":-1}`))
 	w := httptest.NewRecorder()
 
 	server.handleAddExample(w, req)
@@ -320,7 +320,7 @@ Related spec scenarios: RS.MSC.48, RS.MSC.49
 func TestTTLSweepStartsAndStops(t *testing.T) {
 	t.Parallel()
 
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 	require.NotNil(t, server.registry.sweepCancel, "sweep should be initialized on server creation")
 
 	// Verify the background sweep goroutine runs: add an expired example and
@@ -358,7 +358,7 @@ RLock. The fresh-slice allocation in sweepExpiredExamples removes the race.
 Related spec scenarios: RS.MSC.41, RS.MSC.44
 */
 func TestConcurrentSelectAndSweepNoDataRace(t *testing.T) {
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 
 	key := "GET /test"
 	examples := make([]dynamicExample, 0, 64)

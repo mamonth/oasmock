@@ -7,6 +7,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/gorilla/websocket"
+	"github.com/mamonth/oasmock/internal/asyncapi"
 	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,18 +24,18 @@ Related spec scenarios: RS.ASP.6, RS.ASP.9
 func TestWSProtocolAdapter_SendEchoAck(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
 
 	mapping := &RouteMapping{
-		Protocol: asyncWSProtocol,
+		Protocol: asyncapi.ProtocolWS,
 		Action:   "send",
 		Path:     "/socket",
 		Pattern:  "/socket",
 		Messages: nil,
 	}
 
-	adapter := srv.adapterForProtocol(asyncWSProtocol)
+	adapter := srv.adapterForProtocol(asyncapi.ProtocolWS)
 	require.NotNil(t, adapter)
 
 	ts := httptest.NewServer(adapter.Handler(mapping, srv.asyncMessageHandler(mapping)))
@@ -62,11 +63,11 @@ Related spec scenarios: RS.ASP.2, RS.ASP.7
 func TestWSProtocolAdapter_ReceiveEmitsOnConnect(t *testing.T) {
 	t.Parallel()
 
-	srv, _, stateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
 	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
 
 	mapping := &RouteMapping{
-		Protocol: asyncWSProtocol,
+		Protocol: asyncapi.ProtocolWS,
 		Action:   "receive",
 		Path:     "/prices",
 		Pattern:  "/prices",
@@ -80,7 +81,7 @@ func TestWSProtocolAdapter_ReceiveEmitsOnConnect(t *testing.T) {
 		},
 	}
 
-	adapter := srv.adapterForProtocol(asyncWSProtocol)
+	adapter := srv.adapterForProtocol(asyncapi.ProtocolWS)
 	require.NotNil(t, adapter)
 
 	ts := httptest.NewServer(adapter.Handler(mapping, srv.asyncMessageHandler(mapping)))

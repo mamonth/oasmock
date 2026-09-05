@@ -64,6 +64,37 @@ func TestEventBus_DelayedEmissionDelaysDelivery(t *testing.T) {
 }
 
 /*
+Scenario: Shutdown cancels pending delayed emissions
+Given an event-driven example with a large x-mock-delay
+When the event fires and the bus shuts down before the delay elapses
+Then no delivery occurs after shutdown
+
+Related spec scenarios: RS.AMG.30
+*/
+func TestEventBus_ShutdownCancelsDelayedEmission(t *testing.T) {
+	t.Parallel()
+
+	var pushed atomic.Int64
+	bus := newEventBus(&stubMessageRenderer{}, &stubConsumerBus{
+		wsPush: func(ConsumerInfo, []byte) { pushed.Add(1) },
+	}, false)
+
+	spec := loaderExampleSpecForTest(map[string]any{"ring": "{$event.tag}"}, map[string]any{
+		"x-mock-match": map[string]any{"{$event.name}": "orderCreated"},
+		"x-mock-delay": float64(500),
+	})
+	_, _, err := bus.registerRuntimeExample("ex-1", "/alerts", "", spec)
+	require.NoError(t, err)
+
+	bus.fire("orderCreated", map[string]any{"tag": "hi"}, "", true, nil)
+	// Shut down long before the 500ms delay elapses.
+	bus.shutdown()
+
+	time.Sleep(700 * time.Millisecond)
+	assert.Zero(t, pushed.Load(), "no delivery may occur after shutdown")
+}
+
+/*
 Scenario: Delayed connect built-in emission
 Given a connect example declaring x-mock-delay 60 on an event-driven match
 When the connect built-in fires for a recipient

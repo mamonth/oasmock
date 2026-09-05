@@ -6,16 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"net/http"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/mamonth/oasmock/internal/extensions"
-	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/mamonth/oasmock/internal/runtime"
 )
 
@@ -37,270 +33,6 @@ func newExampleEngine(config Config, deps Dependencies, registry *exampleRegistr
 		stateStore:   deps.StateStore,
 		historyStore: deps.HistoryStore,
 		registry:     registry,
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Runtime expression evaluation
-// ---------------------------------------------------------------------------
-
-func (e *exampleEngine) replaceEmbeddedExpressions(str string, eval runtime.Evaluator) (string, error) {
-	var result strings.Builder
-	i := 0
-	for i < len(str) {
-		// Find start of expression "{$"
-		start := strings.Index(str[i:], "{$")
-		if start == -1 {
-			result.WriteString(str[i:])
-			break
-		}
-		start += i
-		// Write literal part before expression
-		result.WriteString(str[i:start])
-		// Find matching '}'
-		braceDepth := 1
-		j := start + 2
-		for j < len(str) && braceDepth > 0 {
-			ch := str[j]
-			if ch == '{' && j+1 < len(str) && str[j+1] == '$' {
-				braceDepth++
-				j += 2
-				continue
-			}
-			if ch == '}' {
-				braceDepth--
-				if braceDepth == 0 {
-					break
-				}
-			}
-			j++
-		}
-		if braceDepth != 0 {
-			// Unmatched braces, treat as literal
-			result.WriteString(str[start:])
-			break
-		}
-		// j now points at the closing '}'
-		end := j
-		expr := str[start : end+1]
-		// Evaluate expression
-		value, err := eval.Evaluate(expr)
-		if err != nil {
-			// If evaluation fails, keep the original expression
-			result.WriteString(expr)
-		} else {
-			// Convert value to string
-			switch v := value.(type) {
-			case string:
-				result.WriteString(v)
-			default:
-				b, err := json.Marshal(v)
-				if err != nil {
-					result.WriteString(expr)
-				} else {
-					result.Write(b)
-				}
-			}
-		}
-		i = end + 1
-	}
-	return result.String(), nil
-}
-
-func (e *exampleEngine) evaluateExpressionInString(str string, eval runtime.Evaluator) (string, error) {
-	// First, check if the whole string is a runtime expression (optimization)
-	if strings.HasPrefix(str, "{$") && strings.HasSuffix(str, "}") && !strings.Contains(str[2:], "{$") {
-		result, err := eval.Evaluate(str)
-		if err != nil {
-			return "", err
-		}
-		// Convert result to string
-		switch v := result.(type) {
-		case string:
-			return v, nil
-		default:
-			b, err := json.Marshal(v)
-			if err != nil {
-				return "", err
-			}
-			return string(b), nil
-		}
-	}
-	// Otherwise replace embedded expressions
-	return e.replaceEmbeddedExpressions(str, eval)
-}
-
-func (e *exampleEngine) evaluateValue(val any, eval runtime.Evaluator) (any, error) {
-	// Handle strings: they may contain embedded runtime expressions
-	if str, ok := val.(string); ok {
-		// Check if the whole string is a single runtime expression (no other characters)
-		if strings.HasPrefix(str, "{$") && strings.HasSuffix(str, "}") && strings.Count(str, "{$") == 1 {
-			return eval.Evaluate(str)
-		}
-		// Otherwise replace embedded expressions
-		return e.replaceEmbeddedExpressions(str, eval)
-	}
-	// Recursively handle maps and slices
-	switch v := val.(type) {
-	case map[string]any:
-		result := make(map[string]any)
-		for k, item := range v {
-			resolvedK, err := e.evaluateExpressionInString(k, eval)
-			if err != nil {
-				return nil, err
-			}
-			resolvedItem, err := e.evaluateValue(item, eval)
-			if err != nil {
-				return nil, err
-			}
-			result[resolvedK] = resolvedItem
-		}
-		return result, nil
-	case []any:
-		result := make([]any, len(v))
-		for i, item := range v {
-			resolvedItem, err := e.evaluateValue(item, eval)
-			if err != nil {
-				return nil, err
-			}
-			result[i] = resolvedItem
-		}
-		return result, nil
-	default:
-		// Literal value
-		return val, nil
-	}
-}
-
-// ---------------------------------------------------------------------------
-// State mutation (x-mock-set-state)
-// ---------------------------------------------------------------------------
-
-func (e *exampleEngine) handleDeleteState(prefix, resolvedKey string) {
-	e.stateStore.Delete(prefix, resolvedKey)
-	if e.verbose {
-		slog.Debug("Deleted state", "key", resolvedKey, "namespace", prefix)
-	}
-}
-
-func (e *exampleEngine) handleIncrementState(prefix, resolvedKey string, incVal any, eval runtime.Evaluator) error {
-	resolvedInc, err := e.evaluateValue(incVal, eval)
-	if err != nil {
-		if e.verbose {
-			slog.Debug("Failed to evaluate increment value", "error", err)
-		}
-		return err
-	}
-	// Convert to float64
-	var delta float64
-	switch v := resolvedInc.(type) {
-	case float64:
-		delta = v
-	case int:
-		delta = float64(v)
-	case string:
-		// Try to parse as number
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			delta = f
-		} else {
-			if e.verbose {
-				slog.Debug("Increment value is not a number", "value", v)
-			}
-			return fmt.Errorf("increment value is not a number: %s", v)
-		}
-	default:
-		if e.verbose {
-			slog.Debug("Increment value has unsupported type", "type", fmt.Sprintf("%T", v))
-		}
-		return fmt.Errorf("increment value has unsupported type: %T", v)
-	}
-	newVal, err := e.stateStore.Increment(prefix, resolvedKey, delta)
-	if err != nil {
-		if e.verbose {
-			slog.Debug("Failed to increment state", "key", resolvedKey, "error", err)
-		}
-		return err
-	}
-	if e.verbose {
-		slog.Debug("Incremented state", "key", resolvedKey, "namespace", prefix, "delta", delta, "newValue", newVal)
-	}
-	return nil
-}
-
-func (e *exampleEngine) handleValueObjectState(prefix, resolvedKey string, valObj any, eval runtime.Evaluator) error {
-	resolvedVal, err := e.evaluateValue(valObj, eval)
-	if err != nil {
-		if e.verbose {
-			slog.Debug("Failed to evaluate value object", "error", err)
-		}
-		return err
-	}
-	e.stateStore.Set(prefix, resolvedKey, resolvedVal)
-	if e.verbose {
-		slog.Debug("Set state", "key", resolvedKey, "namespace", prefix, "value", resolvedVal)
-	}
-	return nil
-}
-
-func (e *exampleEngine) handleMapState(prefix, resolvedKey string, m map[string]any, eval runtime.Evaluator) (handled bool, err error) {
-	if incVal, hasInc := m["increment"]; hasInc {
-		err = e.handleIncrementState(prefix, resolvedKey, incVal, eval)
-		return true, err
-	}
-	if valObj, hasVal := m["value"]; hasVal {
-		err = e.handleValueObjectState(prefix, resolvedKey, valObj, eval)
-		return true, err
-	}
-	return false, nil
-}
-
-func (e *exampleEngine) handleSimpleState(prefix, resolvedKey string, val any, eval runtime.Evaluator) error {
-	resolvedVal, err := e.evaluateValue(val, eval)
-	if err != nil {
-		if e.verbose {
-			slog.Debug("Failed to evaluate value for key", "key", resolvedKey, "error", err)
-		}
-		return err
-	}
-	e.stateStore.Set(prefix, resolvedKey, resolvedVal)
-	if e.verbose {
-		slog.Debug("Set state", "key", resolvedKey, "namespace", prefix, "value", resolvedVal)
-	}
-	return nil
-}
-
-func (e *exampleEngine) ApplySetState(stateMap map[string]any, eval runtime.Evaluator, prefix string) {
-	for key, val := range stateMap {
-		// Evaluate runtime expressions in key
-		resolvedKey, err := e.evaluateExpressionInString(key, eval)
-		if err != nil {
-			if e.verbose {
-				slog.Debug("Failed to evaluate key", "key", key, "error", err)
-			}
-			continue
-		}
-
-		// Handle null value (delete)
-		if val == nil {
-			e.handleDeleteState(prefix, resolvedKey)
-			continue
-		}
-
-		// Handle map (increment or value object)
-		if m, ok := val.(map[string]any); ok {
-			handled, _ := e.handleMapState(prefix, resolvedKey, m, eval)
-			if handled {
-				// Error already logged inside helpers
-				continue
-			}
-			// Not a recognized map structure, fall through to simple value
-		}
-
-		// Simple value (could be runtime expression)
-		if err := e.handleSimpleState(prefix, resolvedKey, val, eval); err != nil {
-			// Error already logged inside helper
-			continue
-		}
 	}
 }
 
@@ -414,52 +146,40 @@ func (e *exampleEngine) selectExample(mediaType *openapi3.MediaType, eval runtim
 	withParamsMatch, withoutParamsMatch := e.categorizeExamples(mediaType.Examples, keys, eval, opID)
 
 	// First, try examples with params-match
-	for _, k := range keys {
-		ex, ok := withParamsMatch[k]
-		if !ok {
-			continue
-		}
-		pm, _ := extensions.ExtractParamsMatch(ex)
-		if e.verbose {
-			slog.Debug("Example has x-mock-params-match", "example", k, "params", pm)
-		}
-		matched, err := extensions.EvaluateParamsMatch(pm, eval)
-		if err != nil {
-			if e.verbose {
-				slog.Debug("Error evaluating params-match", "example", k, "error", err)
-			}
-			continue
-		}
-		if e.verbose {
-			slog.Debug("Example params-match result", "example", k, "matched", matched)
-		}
-		if matched {
-			if extensions.ExtractOnce(ex) {
-				exampleID := opID + ":" + k
-				e.registry.markOnceUsed(exampleID)
-				if e.verbose {
-					slog.Debug("Marked example as used (x-mock-once)", "example", k)
-				}
-			}
-			return ex, k
-		}
+	if ex, k := e.selectFromBucket(withParamsMatch, keys, eval, opID, true); ex != nil {
+		return ex, k
 	}
-
 	// No matched params-match examples, try those without params-match
+	return e.selectFromBucket(withoutParamsMatch, keys, eval, opID, false)
+}
+
+// selectFromBucket returns the first example of a bucket (in key order) that
+// passes the optional params-match evaluation, marking x-mock-once examples as
+// used. It returns nil when none matches.
+func (e *exampleEngine) selectFromBucket(bucket map[string]*openapi3.Example, keys []string, eval runtime.Evaluator, opID string, requireMatch bool) (*openapi3.Example, string) {
 	for _, k := range keys {
-		ex, ok := withoutParamsMatch[k]
+		ex, ok := bucket[k]
 		if !ok {
 			continue
+		}
+		if requireMatch {
+			pm, _ := extensions.ExtractParamsMatch(ex)
+			matched, err := extensions.EvaluateParamsMatch(pm, eval)
+			if err != nil {
+				if e.verbose {
+					slog.Debug("Error evaluating params-match", "example", k, "error", err)
+				}
+				continue
+			}
+			if !matched {
+				continue
+			}
 		}
 		if extensions.ExtractOnce(ex) {
-			exampleID := opID + ":" + k
-			e.registry.markOnceUsed(exampleID)
+			e.registry.markOnceUsed(opID + ":" + k)
 			if e.verbose {
 				slog.Debug("Marked example as used (x-mock-once)", "example", k)
 			}
-		}
-		if e.verbose {
-			slog.Debug("Selecting example (no params-match)", "example", k)
 		}
 		return ex, k
 	}
@@ -584,194 +304,4 @@ func (e *exampleEngine) resolveHeaderValue(val any, eval runtime.Evaluator) (str
 		}
 	}
 	return "", false
-}
-
-// ---------------------------------------------------------------------------
-// AsyncAPI message rendering
-// ---------------------------------------------------------------------------
-
-// renderAsyncMessage selects a message example from the route's AsyncAPI
-// message specs (or an injected dynamic example), evaluates runtime
-// expressions, applies x-mock-set-state, and returns the rendered payload
-// bytes. It returns the number of produced messages (0 when the route has no
-// reply message/examples).
-func (e *exampleEngine) renderAsyncMessage(mapping *RouteMapping, in InboundMessage) (int, []byte, error) {
-	opID := "async:" + mapping.Protocol + ":" + mapping.Pattern
-
-	// Dynamic examples injected via the management API take priority (8.2).
-	evaluator := e.newAsyncEvaluator(mapping, in)
-	if dyn, _ := e.registry.selectDynamic(routeKey(mapping.Method, mapping.ChiPattern), evaluator); dyn != nil {
-		body, err := e.evaluateValue(dyn.response.body, evaluator)
-		if err != nil {
-			return 0, nil, err
-		}
-		jsonBody, merr := json.Marshal(body)
-		if merr != nil {
-			return 0, nil, merr
-		}
-		return 1, jsonBody, nil
-	}
-
-	return e.RenderMessageSpecs(mapping.Messages, mapping.Prefix, opID, in)
-}
-
-// newAsyncEvaluator builds an evaluator for an async exchange with the
-// protocol-relevant data sources.
-func (e *exampleEngine) newAsyncEvaluator(mapping *RouteMapping, in InboundMessage) runtime.Evaluator {
-	eval := runtime.NewEvaluator()
-	eval.AddSource("request", e.asyncRequestSource(in))
-	eval.AddSource("message", &runtime.MessageSource{Payload: jsonPayload(in.Payload), Headers: in.Headers})
-	eval.AddSource("channel", &runtime.ChannelSource{Params: in.PathParams})
-	eval.AddSource("state", e.NewStateSource(mapping.Prefix))
-	eval.AddSource("env", e.NewEnvSource())
-	return eval
-}
-
-// renderMessageSpecs renders the first selectable example across the given
-// message specs using the shared selection pipeline (design D5). The evaluator
-// exposes {$request.*}, {$message.*}, {$channel.*}, {$state.*} and {$env.*}.
-func (e *exampleEngine) RenderMessageSpecs(messages []*loader.MessageSpec, prefix, opID string, in InboundMessage) (int, []byte, error) {
-	evaluator := runtime.NewEvaluator()
-	evaluator.AddSource("request", e.asyncRequestSource(in))
-	evaluator.AddSource("message", &runtime.MessageSource{
-		Payload: jsonPayload(in.Payload),
-		Headers: in.Headers,
-	})
-	evaluator.AddSource("channel", &runtime.ChannelSource{Params: in.PathParams})
-	evaluator.AddSource("state", e.NewStateSource(prefix))
-	evaluator.AddSource("env", e.NewEnvSource())
-
-	for _, msg := range messages {
-		example, _ := e.SelectAsyncExample(msg, evaluator, opID)
-		if example == nil {
-			continue
-		}
-		if stateMap, ok := extensions.ValueSetState(example); ok {
-			e.ApplySetState(stateMap, evaluator, prefix)
-		}
-		body, err := e.RenderAsyncPayload(example, evaluator)
-		if err != nil {
-			return 0, nil, err
-		}
-		return 1, body, nil
-	}
-	return 0, nil, nil
-}
-
-// asyncRequestSource adapts an InboundMessage to a runtime data source.
-func (e *exampleEngine) asyncRequestSource(in InboundMessage) *runtime.RequestSource {
-	headers := make(map[string][]string, len(in.Headers))
-	for k, v := range in.Headers {
-		headers[k] = []string{v}
-	}
-	return &runtime.RequestSource{
-		PathParams:  in.PathParams,
-		QueryParams: nil,
-		Headers:     headers,
-		Body:        jsonPayload(in.Payload),
-		Cookies:     nil,
-	}
-}
-
-// selectAsyncExample selects a message example using the x-mock-* semantics
-// (skip, once, params-match) shared with the OpenAPI pipeline.
-func (e *exampleEngine) SelectAsyncExample(message *loader.MessageSpec, evaluator runtime.Evaluator, opID string) (*MessageExampleView, string) {
-	if message == nil {
-		return nil, ""
-	}
-	indices := make([]int, 0, len(message.Examples))
-	for i := range message.Examples {
-		indices = append(indices, i)
-	}
-	slices.Sort(indices)
-
-	for _, idx := range indices {
-		example := message.Examples[idx]
-		exampleKey := idxName(message.Name, idx)
-		if example == nil {
-			continue
-		}
-		view := &MessageExampleView{spec: example}
-		if extensions.ValueSkip(view) {
-			continue
-		}
-		onceID := opID + ":" + exampleKey
-		if extensions.ValueOnce(view) && e.registry.isOnceUsed(onceID) {
-			continue
-		}
-		if match, ok := extensions.ValueMatch(view); ok {
-			matched, err := extensions.EvaluateParamsMatch(extensions.ParamsMatch(match), evaluator)
-			if err != nil || !matched {
-				continue
-			}
-		}
-		if extensions.ValueOnce(view) {
-			e.registry.markOnceUsed(onceID)
-		}
-		return view, exampleKey
-	}
-	return nil, ""
-}
-
-// renderAsyncPayload evaluates runtime expressions in a message example's
-// payload and returns the JSON bytes.
-func (e *exampleEngine) RenderAsyncPayload(example *MessageExampleView, evaluator runtime.Evaluator) ([]byte, error) {
-	payload := example.Payload()
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	resolved, err := e.evaluateValue(payload, evaluator)
-	if err != nil {
-		return nil, fmt.Errorf("failed to evaluate message payload: %w", err)
-	}
-	if e.verbose {
-		slog.Debug("Rendered AsyncAPI message payload", "payload", resolved)
-	}
-	return json.Marshal(resolved)
-}
-
-// recordAsyncExchange records an AsyncAPI message exchange in the request
-// history store (RS.ATM.15).
-func (e *exampleEngine) recordAsyncExchange(in InboundMessage, address string, status int, responseBody []byte) {
-	headers := make(http.Header, len(in.Headers))
-	for k, v := range in.Headers {
-		headers.Set(k, v)
-	}
-	now := time.Now()
-	record := RequestRecord{
-		ID:        fmt.Sprintf("%d", now.UnixNano()),
-		Timestamp: now,
-		Method:    "async",
-		Path:      address,
-		Query:     "",
-		Headers:   headers,
-		Body:      in.Payload,
-		Response: &ResponseRecord{
-			StatusCode: status,
-			Headers:    http.Header{},
-			Body:       responseBody,
-			Duration:   0,
-		},
-	}
-	e.historyStore.Add(record)
-}
-
-// newStateSource builds a runtime state source for a schema namespace.
-func (e *exampleEngine) NewStateSource(prefix string) *runtime.StateSource {
-	data := e.stateStore.GetNamespace(prefix)
-	if data == nil {
-		data = make(map[string]any)
-	}
-	return &runtime.StateSource{Data: data}
-}
-
-// newEnvSource builds a runtime environment-variable source.
-func (e *exampleEngine) NewEnvSource() *runtime.EnvSource {
-	env := make(map[string]string)
-	for _, item := range os.Environ() {
-		if key, val, found := strings.Cut(item, "="); found {
-			env[key] = val
-		}
-	}
-	return &runtime.EnvSource{Env: env}
 }

@@ -1,8 +1,6 @@
 package server
 
 import (
-	"encoding/json"
-	"io"
 	"net/http"
 
 	"github.com/mamonth/oasmock/internal/runtime"
@@ -23,13 +21,8 @@ type fireEventRequest struct {
 // old contract so pre-change clients keep working (design D1); the canonical
 // /_mock/events endpoint still requires the type discriminator.
 func (s *Server) handleFireEventLegacy(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "failed to read request body")
-		return
-	}
 	var req fireEventRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := decodeJSONBody(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -41,13 +34,8 @@ func (s *Server) handleFireEventLegacy(w http.ResponseWriter, r *http.Request) {
 // broker. The type discriminator is required and only "fire" is accepted
 // (RS.MAPI.32); fire reuses the existing ad-hoc fire semantics.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "failed to read request body")
-		return
-	}
 	var req fireEventRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := decodeJSONBody(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -84,8 +72,8 @@ func (s *Server) dispatchFireEvent(w http.ResponseWriter, req fireEventRequest) 
 	// (RS.MAPI.23).
 	if len(req.Payload) > 0 {
 		eval := runtime.NewEvaluator()
-		eval.AddSource("state", s.newStateSource(""))
-		eval.AddSource("env", s.newEnvSource())
+		eval.AddSource(runtime.SourceState, s.newStateSource(""))
+		eval.AddSource(runtime.SourceEnv, s.newEnvSource())
 		resolved, err := s.evaluateValue(req.Payload, eval)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -103,8 +91,7 @@ func (s *Server) dispatchFireEvent(w http.ResponseWriter, req fireEventRequest) 
 	// fires only reach empty-prefix subscriptions (use global: true for
 	// prefixed channels).
 	s.eventBus.fire(req.Event, req.Payload, "", req.Global, triggerDelay(req.Delay))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"event":   req.Event,
 	})

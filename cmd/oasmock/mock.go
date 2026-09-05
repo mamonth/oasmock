@@ -122,8 +122,7 @@ var mockCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(mockCmd)
-	// Set mock as default command when no subcommand given
-	rootCmd.Run = mockCmd.Run
+	// Set mock as default command when no subcommand given.
 	rootCmd.RunE = mockCmd.RunE
 
 	// Ensure errors and usage are handled by our custom logic
@@ -158,69 +157,19 @@ func init() {
 }
 
 func runMock(cmd *cobra.Command, args []string) error {
-	// Read config file (if present)
-	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			// Config file exists but is malformed - log warning
-			slog.Warn("Failed to read config file", "err", err)
-		}
-		// Config file not found is not an error
-	}
-
-	// Parse schema configuration from YAML (if present)
-	if err := parseSchemaConfig(cmd); err != nil {
+	cfg, err := resolveMockConfig(cmd)
+	if err != nil {
 		return err
-	}
-
-	// Read values from viper (environment overrides)
-	port := viper.GetInt("port")
-	delay := viper.GetInt("delay")
-	verbose := viper.GetBool("verbose")
-	noCORS := viper.GetBool("nocors")
-	historySize := viper.GetInt("history_size")
-	noControlAPI := viper.GetBool("no_control_api")
-
-	// Configure structured logging
-	level := slog.LevelInfo
-	if verbose {
-		level = slog.LevelDebug
-	}
-	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
-	slog.SetDefault(slog.New(handler))
-
-	// Validate flag combinations
-	if len(config.sources) != len(config.prefixes) && len(config.prefixes) != 0 {
-		return validationError("number of --prefix flags must match number of --from flags, or no --prefix flags provided")
-	}
-	// port 0 selects an OS-assigned (ephemeral) port (RS.CLI.32).
-	if err := validatePort(port); err != nil {
-		return err
-	}
-	if delay < 0 {
-		return validationError("delay cannot be negative")
-	}
-	if historySize < 0 {
-		return validationError("history size cannot be negative")
 	}
 
 	// Load OpenAPI schemas
-	schemas, err := loader.LoadSchemas(config.sources, config.prefixes)
+	schemas, err := loader.LoadSchemas(cfg.sources, cfg.prefixes)
 	if err != nil {
 		return schemaError("failed to load schemas: %v", err)
 	}
 
-	// Prepare server configuration
-	serverConfig := server.Config{
-		Port:             port,
-		Delay:            time.Duration(delay) * time.Millisecond,
-		Verbose:          verbose,
-		EnableCORS:       !noCORS,
-		HistorySize:      historySize,
-		EnableControlAPI: !noControlAPI,
-	}
-
 	// Create and start server
-	srv, err := server.New(serverConfig, schemas)
+	srv, err := server.New(cfg.serverConfig(), schemas)
 	if err != nil {
 		return schemaError("failed to create server: %v", err)
 	}
@@ -232,9 +181,9 @@ func runMock(cmd *cobra.Command, args []string) error {
 	ln, boundPort, err := srv.Listen()
 	if err != nil {
 		if errors.Is(err, syscall.EADDRINUSE) {
-			return portError("port %d is already in use", port)
+			return portError("port %d is already in use", cfg.port)
 		}
-		return portError("failed to listen on port %d: %v", port, err)
+		return portError("failed to listen on port %d: %v", cfg.port, err)
 	}
 
 	// Serve in a goroutine so we can handle signals
@@ -269,4 +218,78 @@ func runMock(cmd *cobra.Command, args []string) error {
 	case err := <-serverErrChan:
 		return fmt.Errorf("server error: %w", err)
 	}
+}
+
+// serverConfig converts the resolved CLI configuration into the server config.
+func (c mockConfig) serverConfig() server.Config {
+	return server.Config{
+		Port:             c.port,
+		Delay:            time.Duration(c.delay) * time.Millisecond,
+		Verbose:          c.verbose,
+		EnableCORS:       !c.noCORS,
+		HistorySize:      c.historySize,
+		EnableControlAPI: !c.noControlAPI,
+	}
+}
+
+// resolveMockConfig reads the config file, environment and flags into a single
+// resolved mockConfig and configures logging. Sources/prefixes resolve from
+// flags or the config file's schemas list; scalar options resolve through viper
+// (flag > env > config file). Validation covers the flag combinations with no
+// server-side equivalent.
+func resolveMockConfig(cmd *cobra.Command) (mockConfig, error) {
+	// Read config file (if present)
+	if err := viper.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			// Config file exists but is malformed - log warning
+			slog.Warn("Failed to read config file", "err", err)
+		}
+		// Config file not found is not an error
+	}
+
+	// Parse schema configuration from YAML (if present)
+	if err := parseSchemaConfig(cmd); err != nil {
+		return mockConfig{}, err
+	}
+
+	cfg := mockConfig{
+		sources:      config.sources,
+		prefixes:     config.prefixes,
+		port:         viper.GetInt("port"),
+		delay:        viper.GetInt("delay"),
+		verbose:      viper.GetBool("verbose"),
+		noCORS:       viper.GetBool("nocors"),
+		historySize:  viper.GetInt("history_size"),
+		noControlAPI: viper.GetBool("no_control_api"),
+	}
+
+	// Configure structured logging from the single resolved verbosity value.
+	level := slog.LevelInfo
+	if cfg.verbose {
+		level = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+
+	if err := validateMockConfig(cfg); err != nil {
+		return mockConfig{}, err
+	}
+	return cfg, nil
+}
+
+// validateMockConfig validates flag combinations and option ranges.
+func validateMockConfig(cfg mockConfig) error {
+	if len(cfg.sources) != len(cfg.prefixes) && len(cfg.prefixes) != 0 {
+		return validationError("number of --prefix flags must match number of --from flags, or no --prefix flags provided")
+	}
+	// port 0 selects an OS-assigned (ephemeral) port (RS.CLI.32).
+	if err := validatePort(cfg.port); err != nil {
+		return err
+	}
+	if cfg.delay < 0 {
+		return validationError("delay cannot be negative")
+	}
+	if cfg.historySize < 0 {
+		return validationError("history size cannot be negative")
+	}
+	return nil
 }

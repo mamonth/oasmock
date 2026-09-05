@@ -21,7 +21,7 @@ func ParseRpcConfig(spec *openapi3.T) (*RpcConfig, error) {
 		return nil, nil
 	}
 
-	extMap, ok := ext.(map[string]interface{})
+	extMap, ok := ext.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("x-rpc must be a map")
 	}
@@ -53,7 +53,7 @@ func ParseRpcConfig(spec *openapi3.T) (*RpcConfig, error) {
 	if !ok {
 		return nil, fmt.Errorf("x-rpc.procedure is required")
 	}
-	procMap, ok := procRaw.(map[string]interface{})
+	procMap, ok := procRaw.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("x-rpc.procedure must be a map")
 	}
@@ -89,7 +89,7 @@ func BuildRpcMappings(infos []SchemaInfo, cfg *RpcConfig) ([]*RpcRouteMapping, e
 				continue
 			}
 
-			fullPath := applyPrefix(prefix, path)
+			fullPath := PrefixPath(prefix, path)
 
 			if !isUnderGateway(fullPath, cfg.Gateway, prefix) {
 				continue
@@ -130,6 +130,6 @@ func BuildRpcMappings(infos []SchemaInfo, cfg *RpcConfig) ([]*RpcRouteMapping, e
 }
 
 func isUnderGateway(path, gateway, prefix string) bool {
-	gwPath := applyPrefix(prefix, gateway)
+	gwPath := PrefixPath(prefix, gateway)
 	return path == gwPath || strings.HasPrefix(path, gwPath+"/")
 }

@@ -401,7 +401,7 @@ func TestManagementAPITTLExpiration(t *testing.T) {
 			return false
 		}
 		defer req.Body.Close() //nolint:errcheck
-		return req.StatusCode == 501
+		return req.StatusCode == http.StatusNotImplemented
 	}, 4*time.Second, 100*time.Millisecond, "expected status 501 after TTL expiry")
 
 	// Check for any errors from the server process

@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -277,4 +278,77 @@ func TestControlAPISpecSync_CrossFormat(t *testing.T) {
 	// documented path /stream is served at /_mock/stream which matches the
 	// AsyncAPI channel address.
 	assert.Equal(t, "_mock/stream", strings.TrimPrefix(ch.Address, "/"))
+}
+
+/*
+Scenario: The OpenAPI control spec documents every error response with the Error body
+Given the api/openapi.yaml produces a valid OpenAPI document
+When each 4xx/5xx response of every management operation is inspected
+Then it carries an application/json body whose schema is the Error shape
+
+Related spec scenarios: RS.MAPI.6, RS.MAPI.21, RS.AMG.28
+*/
+func TestControlAPISpecSync_ErrorResponses(t *testing.T) {
+	t.Parallel()
+	doc := loadOpenAPISpec(t)
+
+	operations := func(item *openapi3.PathItem) []*openapi3.Operation {
+		return []*openapi3.Operation{item.Get, item.Post, item.Delete, item.Patch, item.Put, item.Head, item.Options}
+	}
+
+	checked := 0
+	for path, item := range doc.Paths.Map() {
+		if item == nil {
+			continue
+		}
+		for _, op := range operations(item) {
+			if op == nil {
+				continue
+			}
+			for code, resp := range op.Responses.Map() {
+				status, err := strconv.Atoi(code)
+				if err != nil || status < 400 {
+					continue
+				}
+				require.NotNil(t, resp.Value,
+					"error response %s for %s %s must resolve to a value", code, methodOf(op, item), path)
+				content := resp.Value.Content
+				require.NotNil(t, content,
+					"error response %s for %s %s must declare content", code, methodOf(op, item), path)
+				mt := content.Get("application/json")
+				require.NotNil(t, mt,
+					"error response %s for %s %s must be application/json", code, methodOf(op, item), path)
+				schema := mt.Schema.Value
+				require.NotNil(t, schema,
+					"error response %s for %s %s must carry a schema", code, methodOf(op, item), path)
+				require.NotNil(t, schema.Properties,
+					"error response %s for %s %s must be an object", code, methodOf(op, item), path)
+				require.Contains(t, schema.Properties, "error",
+					"error response %s for %s %s must expose the error field", code, methodOf(op, item), path)
+				checked++
+			}
+		}
+	}
+	require.GreaterOrEqual(t, checked, 15,
+		"the control spec should document error bodies for every management operation")
+}
+
+// methodOf returns the HTTP method for an operation belonging to a path item.
+func methodOf(op *openapi3.Operation, item *openapi3.PathItem) string {
+	switch op {
+	case item.Get:
+		return "GET"
+	case item.Post:
+		return "POST"
+	case item.Delete:
+		return "DELETE"
+	case item.Patch:
+		return "PATCH"
+	case item.Put:
+		return "PUT"
+	case item.Head:
+		return "HEAD"
+	default:
+		return "OPTIONS"
+	}
 }

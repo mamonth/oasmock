@@ -19,7 +19,6 @@ import (
 	"github.com/golang/mock/gomock"
 
 	"github.com/mamonth/oasmock/internal/history"
-	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/mamonth/oasmock/internal/state"
 	mock_runtime "github.com/mamonth/oasmock/mock/runtime"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +26,7 @@ import (
 )
 
 // newMockedServerWithGeneratedMocks creates a server with generated mock dependencies for testing.
-func newMockedServerWithGeneratedMocks(t *testing.T, config Config) (*Server, *MockRouteProvider, *MockStateStore, *MockHistoryStore, *MockExpressionEvaluator, *MockRequestSourceFactory, *MockStateSourceFactory, *MockEnvSourceFactory, *MockExtensionProcessor) {
+func newMockedServerWithGeneratedMocks(t *testing.T, config Config) (*Server, *MockRouteProvider, *MockStateStore, *MockHistoryStore) {
 	t.Helper()
 
 	ctrl := gomock.NewController(t)
@@ -38,21 +37,11 @@ func newMockedServerWithGeneratedMocks(t *testing.T, config Config) (*Server, *M
 	stateStore := NewMockStateStore(ctrl)
 	historyStore := NewMockHistoryStore(ctrl)
 	historyStore.EXPECT().Add(gomock.Any()).AnyTimes()
-	expressionEvaluator := NewMockExpressionEvaluator(ctrl)
-	requestSourceFactory := NewMockRequestSourceFactory(ctrl)
-	stateSourceFactory := NewMockStateSourceFactory(ctrl)
-	envSourceFactory := NewMockEnvSourceFactory(ctrl)
-	extensionProcessor := NewMockExtensionProcessor(ctrl)
 
 	deps := Dependencies{
-		RouteProvider:        routeProvider,
-		StateStore:           stateStore,
-		HistoryStore:         historyStore,
-		RequestSourceFactory: requestSourceFactory,
-		StateSourceFactory:   stateSourceFactory,
-		EnvSourceFactory:     envSourceFactory,
-		ExpressionEvaluator:  expressionEvaluator,
-		ExtensionProcessor:   extensionProcessor,
+		RouteProvider: routeProvider,
+		StateStore:    stateStore,
+		HistoryStore:  historyStore,
 	}
 
 	// Empty schemas since route provider will be mocked
@@ -65,7 +54,7 @@ func newMockedServerWithGeneratedMocks(t *testing.T, config Config) (*Server, *M
 		_ = server.Shutdown(context.Background())
 	})
 
-	return server, routeProvider, stateStore, historyStore, expressionEvaluator, requestSourceFactory, stateSourceFactory, envSourceFactory, extensionProcessor
+	return server, routeProvider, stateStore, historyStore
 }
 
 /*
@@ -141,14 +130,16 @@ func TestValidateAddExampleRequest(t *testing.T) {
 }
 
 /*
-Scenario: Creating new server instance with valid configuration
-Given a valid server configuration and loaded OpenAPI schemas
-When New is called
-Then it returns a server instance with correct configuration
+Scenario: Evaluating a string that may contain embedded runtime expressions
+Given a string and a mock evaluator
+When evaluateExpressionInString is called
+Then whole-string and embedded expressions are resolved, evaluation errors on
+whole-string expressions propagate, and unmatched embedded expressions are kept
+verbatim
 
-Related spec scenarios: RS.MSC.1, RS.MSC.2
+Related spec scenarios: RS.MSC.13, RS.MSC.14, RS.MSC.15, RS.MSC.16
 */
-func TestNewServer(t *testing.T) {
+func TestEvaluateExpressionInString(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -162,7 +153,7 @@ func TestNewServer(t *testing.T) {
 		HistorySize:      1000,
 		EnableControlAPI: true,
 	}
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 
 	tests := []struct {
 		name       string
@@ -259,7 +250,7 @@ func TestEvaluateValue(t *testing.T) {
 		HistorySize:      1000,
 		EnableControlAPI: true,
 	}
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 
 	tests := []struct {
 		name    string
@@ -399,7 +390,7 @@ func TestReplaceEmbeddedExpressions(t *testing.T) {
 		HistorySize:      1000,
 		EnableControlAPI: true,
 	}
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 
 	tests := []struct {
 		name       string
@@ -507,7 +498,7 @@ func TestExtractPathParams(t *testing.T) {
 		HistorySize:      1000,
 		EnableControlAPI: true,
 	}
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 
 	tests := []struct {
 		name         string
@@ -518,16 +509,25 @@ func TestExtractPathParams(t *testing.T) {
 		{
 			name: "no chi context",
 			setupRequest: func() *http.Request {
-				req, _ := http.NewRequest("GET", "/users/123", nil)
+				req, _ := http.NewRequest(http.MethodGet, "/users/123", nil)
 				return req
 			},
 			mapping: &RouteMapping{},
 			want:    map[string]string{},
 		},
 		{
+			name: "no chi context but mapping chi pattern has params",
+			setupRequest: func() *http.Request {
+				req, _ := http.NewRequest(http.MethodGet, "/users/123", nil)
+				return req
+			},
+			mapping: &RouteMapping{ChiPattern: "/users/{id}"},
+			want:    map[string]string{"id": "123"},
+		},
+		{
 			name: "with path parameters",
 			setupRequest: func() *http.Request {
-				req, _ := http.NewRequest("GET", "/users/123", nil)
+				req, _ := http.NewRequest(http.MethodGet, "/users/123", nil)
 				// Create chi route context with URL params
 				routeCtx := chi.NewRouteContext()
 				routeCtx.URLParams.Keys = []string{"userID"}
@@ -542,7 +542,7 @@ func TestExtractPathParams(t *testing.T) {
 		{
 			name: "multiple path parameters",
 			setupRequest: func() *http.Request {
-				req, _ := http.NewRequest("GET", "/orgs/456/users/789", nil)
+				req, _ := http.NewRequest(http.MethodGet, "/orgs/456/users/789", nil)
 				routeCtx := chi.NewRouteContext()
 				routeCtx.URLParams.Keys = []string{"orgID", "userID"}
 				routeCtx.URLParams.Values = []string{"456", "789"}
@@ -555,7 +555,7 @@ func TestExtractPathParams(t *testing.T) {
 		{
 			name: "mismatched keys and values",
 			setupRequest: func() *http.Request {
-				req, _ := http.NewRequest("GET", "/test", nil)
+				req, _ := http.NewRequest(http.MethodGet, "/test", nil)
 				routeCtx := chi.NewRouteContext()
 				routeCtx.URLParams.Keys = []string{"key1", "key2"}
 				routeCtx.URLParams.Values = []string{"value1"} // Missing second value
@@ -728,7 +728,7 @@ func TestApplySetState(t *testing.T) {
 			defer ctrl.Finish()
 
 			store, eval, callsPtr := tt.setup(ctrl)
-			server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+			server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 			server.stateStore = store
 			server.engine.stateStore = store
 			server.applySetState(tt.stateMap, eval, "")
@@ -829,14 +829,14 @@ func TestHandleAddExample(t *testing.T) {
 			t.Parallel()
 
 			// Create server with mock dependencies
-			server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+			server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 			// Set up mappings
 			server.mappings = tt.mappings
 			// Initialize dynamic examples map
 			server.registry.dynamicExamples = make(map[string][]dynamicExample)
 
 			// Create request
-			req := httptest.NewRequest("POST", "/api/examples", strings.NewReader(tt.reqBody))
+			req := httptest.NewRequest(http.MethodPost, "/api/examples", strings.NewReader(tt.reqBody))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
@@ -1002,8 +1002,8 @@ func TestHandleGetRequests(t *testing.T) {
 		},
 		{
 			name:       "limit exceeds max",
-			query:      "limit=150",
-			wantCount:  5, // limit capped at 100
+			query:      "limit=1500",
+			wantCount:  5, // limit capped at 1000 (RS.MAPI.12)
 			wantMethod: "GET",
 			wantPath:   "/users",
 		},
@@ -1025,7 +1025,7 @@ func TestHandleGetRequests(t *testing.T) {
 			defer ctrl.Finish()
 
 			// Create server with mock history store
-			server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+			server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 			// Replace history store with generated mock
 			mockHistoryStore := NewMockHistoryStore(ctrl)
 			mockHistoryStore.EXPECT().GetAll().Return(testRecords)
@@ -1037,7 +1037,7 @@ func TestHandleGetRequests(t *testing.T) {
 			if tt.query != "" {
 				url += "?" + tt.query
 			}
-			req := httptest.NewRequest("GET", url, nil)
+			req := httptest.NewRequest(http.MethodGet, url, nil)
 			w := httptest.NewRecorder()
 
 			// Call handler
@@ -1344,7 +1344,7 @@ paths:
 
 	tests := []struct {
 		name        string
-		setupServer func(*Server, *MockRequestSourceFactory, *MockStateSourceFactory, *MockEnvSourceFactory)
+		setupServer func(*Server)
 		mapping     *RouteMapping
 		wantStatus  int
 		wantBody    string
@@ -1352,15 +1352,9 @@ paths:
 	}{
 		{
 			name: "successful request with built-in example",
-			setupServer: func(s *Server, reqFact *MockRequestSourceFactory, stateFact *MockStateSourceFactory, envFact *MockEnvSourceFactory) {
+			setupServer: func(s *Server) {
 				// No dynamic examples
 				s.registry.dynamicExamples = make(map[string][]dynamicExample)
-				// Setup mock factories (not needed for this test)
-				// With generated mocks, we need to set expectations
-				// Since factories aren't used in this test, we allow any calls returning nil
-				reqFact.EXPECT().NewRequestSource(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-				stateFact.EXPECT().NewStateSource(gomock.Any()).Return(nil).AnyTimes()
-				envFact.EXPECT().NewEnvSource().Return(nil).AnyTimes()
 			},
 			mapping: &RouteMapping{
 				Method:     "GET",
@@ -1378,12 +1372,8 @@ paths:
 		},
 		{
 			name: "no response defined",
-			setupServer: func(s *Server, reqFact *MockRequestSourceFactory, stateFact *MockStateSourceFactory, envFact *MockEnvSourceFactory) {
+			setupServer: func(s *Server) {
 				s.registry.dynamicExamples = make(map[string][]dynamicExample)
-				// Allow any factory calls returning nil
-				reqFact.EXPECT().NewRequestSource(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-				stateFact.EXPECT().NewStateSource(gomock.Any()).Return(nil).AnyTimes()
-				envFact.EXPECT().NewEnvSource().Return(nil).AnyTimes()
 			},
 			mapping: &RouteMapping{
 				Method:     "GET",
@@ -1401,7 +1391,7 @@ paths:
 		},
 		{
 			name: "dynamic example selected",
-			setupServer: func(s *Server, reqFact *MockRequestSourceFactory, stateFact *MockStateSourceFactory, envFact *MockEnvSourceFactory) {
+			setupServer: func(s *Server) {
 				// Add a dynamic example
 				s.registry.dynamicExamples = make(map[string][]dynamicExample)
 				key := "GET /test"
@@ -1418,10 +1408,6 @@ paths:
 						body:    map[string]any{"source": "dynamic"},
 					},
 				}}
-				// Mock factories - allow any calls returning nil
-				reqFact.EXPECT().NewRequestSource(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-				stateFact.EXPECT().NewStateSource(gomock.Any()).Return(nil).AnyTimes()
-				envFact.EXPECT().NewEnvSource().Return(nil).AnyTimes()
 			},
 			mapping: &RouteMapping{
 				Method:     "GET",
@@ -1445,7 +1431,7 @@ paths:
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			// Create server with generated mock dependencies
-			server, _, mockStateStore, mockHistoryStore, mockExpressionEvaluator, reqFact, stateFact, envFact, mockExtensionProcessor := newMockedServerWithGeneratedMocks(t, config)
+			server, _, mockStateStore, mockHistoryStore := newMockedServerWithGeneratedMocks(t, config)
 			// Set default expectations for mocks that will be called by the handler
 			mockStateStore.EXPECT().GetNamespace(gomock.Any()).Return(nil).AnyTimes()
 			mockStateStore.EXPECT().Get(gomock.Any(), gomock.Any()).Return(nil, false).AnyTimes()
@@ -1454,17 +1440,9 @@ paths:
 			mockHistoryStore.EXPECT().GetAll().Return(nil).AnyTimes()
 			mockHistoryStore.EXPECT().Count().Return(0).AnyTimes()
 			mockHistoryStore.EXPECT().Capacity().Return(1000).AnyTimes()
-			mockExpressionEvaluator.EXPECT().AddSource(gomock.Any(), gomock.Any()).AnyTimes()
-			mockExpressionEvaluator.EXPECT().Evaluate(gomock.Any()).Return(nil, nil).AnyTimes()
-			mockExtensionProcessor.EXPECT().ExtractSetState(gomock.Any()).Return(nil, false).AnyTimes()
-			mockExtensionProcessor.EXPECT().ExtractSkip(gomock.Any()).Return(false).AnyTimes()
-			mockExtensionProcessor.EXPECT().ExtractOnce(gomock.Any()).Return(false).AnyTimes()
-			mockExtensionProcessor.EXPECT().ExtractParamsMatch(gomock.Any()).Return(nil, false).AnyTimes()
-			mockExtensionProcessor.EXPECT().EvaluateParamsMatch(gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
-			mockExtensionProcessor.EXPECT().ExtractHeaders(gomock.Any()).Return(nil, false).AnyTimes()
 			// Setup server
 			if tt.setupServer != nil {
-				tt.setupServer(server, reqFact, stateFact, envFact)
+				tt.setupServer(server)
 			}
 			// Create request
 			req := httptest.NewRequest(tt.mapping.Method, tt.mapping.Path, nil)
@@ -1512,7 +1490,7 @@ func TestRequestHistoryMiddleware(t *testing.T) {
 		HistorySize:      1000,
 		EnableControlAPI: true,
 	}
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 
 	var capturedRecord RequestRecord
 	mockHistoryStore := NewMockHistoryStore(ctrl)
@@ -1524,7 +1502,7 @@ func TestRequestHistoryMiddleware(t *testing.T) {
 
 	// Create a test request with body
 	reqBody := `{"test":"data"}`
-	req := httptest.NewRequest("POST", "/api/test", bytes.NewReader([]byte(reqBody)))
+	req := httptest.NewRequest(http.MethodPost, "/api/test", bytes.NewReader([]byte(reqBody)))
 	req.Header.Set("X-Custom", "value")
 
 	// Create a response recorder that will be wrapped by middleware's recorder
@@ -1583,9 +1561,9 @@ func TestVerboseLoggingMiddleware(t *testing.T) {
 		HistorySize:      1000,
 		EnableControlAPI: true,
 	}
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 
-	req := httptest.NewRequest("GET", "/test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	w := httptest.NewRecorder()
 	nextCalled := false
 	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1613,7 +1591,7 @@ func TestHandleIncrementState(t *testing.T) {
 	t.Parallel()
 
 	config := Config{}
-	server, _, mockStateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, mockStateStore, _ := newMockedServerWithGeneratedMocks(t, config)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1706,7 +1684,7 @@ func TestHandleMapState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			config := Config{}
-			server, _, mockStateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+			server, _, mockStateStore, _ := newMockedServerWithGeneratedMocks(t, config)
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			mockEval := mock_runtime.NewMockEvaluator(ctrl)
@@ -1758,7 +1736,7 @@ func TestHandleValueObjectState(t *testing.T) {
 	t.Parallel()
 
 	config := Config{}
-	server, _, mockStateStore, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, mockStateStore, _ := newMockedServerWithGeneratedMocks(t, config)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockEval := mock_runtime.NewMockEvaluator(ctrl)
@@ -1812,7 +1790,7 @@ func TestMarkOnceUsedAndIsOnceUsed(t *testing.T) {
 	t.Parallel()
 
 	config := Config{}
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 
 	exampleID := "GET:/users:default"
 
@@ -1828,31 +1806,6 @@ func TestMarkOnceUsedAndIsOnceUsed(t *testing.T) {
 }
 
 /*
-	Scenario: getStatusCode returns status code from mapping
-	Given a route mapping and response
-	When getStatusCode is called
-	Then it should return appropriate status code (currently defaults to 200)
-
-	Related spec scenarios: RS.MSC.27
-*/
-
-func TestGetStatusCode(t *testing.T) {
-	t.Parallel()
-
-	mapping := &loader.RouteMapping{
-		Method:     "GET",
-		Path:       "/test",
-		Pattern:    "/test",
-		Prefix:     "",
-		ChiPattern: "/test",
-	}
-	response := &openapi3.Response{}
-
-	status := getStatusCode(mapping, response)
-	assert.Equal(t, 200, status, "should default to 200")
-}
-
-/*
 	Scenario: selectResponse chooses appropriate response from mapping
 	Given a route mapping with various responses
 	When selectResponse is called
@@ -1865,7 +1818,7 @@ func TestSelectResponse(t *testing.T) {
 	t.Parallel()
 
 	config := Config{}
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	mockEval := mock_runtime.NewMockEvaluator(ctrl)
@@ -1998,7 +1951,6 @@ Then the server should start successfully and shut down without error
 Related spec scenarios: RS.MSC.1
 */
 func TestStartAndShutdown(t *testing.T) {
-
 	config := Config{
 		Port:             0,
 		Delay:            0,
@@ -2007,7 +1959,7 @@ func TestStartAndShutdown(t *testing.T) {
 		HistorySize:      1000,
 		EnableControlAPI: true,
 	}
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 
 	// Channel to capture error from Start
 	startErrCh := make(chan error, 1)
@@ -2057,7 +2009,7 @@ intermittently. The httpMu mutex in Start/Shutdown removes the race.
 Related spec scenarios: RS.MSC.1
 */
 func TestConcurrentStartAndShutdownNoDataRace(t *testing.T) {
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 
 	startErrCh := make(chan error, 1)
 	go func() {
@@ -2087,7 +2039,7 @@ Then both calls return nil and only one graceful shutdown occurs
 Related spec scenarios: RS.MSC.1
 */
 func TestShutdownIsIdempotent(t *testing.T) {
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, Config{})
 
 	startErrCh := make(chan error, 1)
 	go func() {
@@ -2125,7 +2077,7 @@ func TestShutdownWithNilHTTPServer(t *testing.T) {
 	t.Parallel()
 
 	config := Config{}
-	server, _, _, _, _, _, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
+	server, _, _, _ := newMockedServerWithGeneratedMocks(t, config)
 	// Ensure httpServer is nil (should be by default)
 	assert.Nil(t, server.httpServer, "httpServer should be nil before Start")
 
@@ -2287,252 +2239,4 @@ func TestHistoryRingBufferStore(t *testing.T) {
 	assert.Equal(t, 0, store.Count(), "Count should be 0 after Clear")
 	records = store.GetAll()
 	assert.Empty(t, records, "GetAll should return empty slice after Clear")
-}
-
-/*
-	Scenario: runtimeDataSourceWrapper correctly delegates to runtime.DataSource
-	Given a mock runtime.DataSource
-	When Get is called on the wrapper
-	Then it should delegate to the underlying source
-
-	Related spec scenarios: RS.MSC.13, RS.MSC.14, RS.MSC.15, RS.MSC.16, RS.MSC.17, RS.MSC.18, RS.MSC.19
-*/
-
-func TestRuntimeDataSourceWrapper(t *testing.T) {
-	t.Parallel()
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockSource := mock_runtime.NewMockDataSource(ctrl)
-	mockSource.EXPECT().Get("test.key").Return("value", true).Times(1)
-	mockSource.EXPECT().Get("nonexistent").Return(nil, false).Times(1)
-
-	wrapper := &runtimeDataSourceWrapper{source: mockSource}
-
-	// Test Get with existing key
-	val, ok := wrapper.Get("test.key")
-	assert.True(t, ok, "Get should return true for existing key")
-	assert.Equal(t, "value", val, "Get should return the value from underlying source")
-
-	// Test Get with non-existent key
-	val, ok = wrapper.Get("nonexistent")
-	assert.False(t, ok, "Get should return false for non-existent key")
-	assert.Nil(t, val, "Get should return nil for non-existent key")
-
-	// Verify mock expectations are satisfied (deferred ctrl.Finish will call ctrl.Verify)
-}
-
-/*
-	Scenario: runtimeRequestSourceFactory creates DataSource for HTTP requests
-	Given an HTTP request with path parameters, query parameters, headers, cookies
-	When NewRequestSource is called
-	Then it should return a DataSource that provides access to request data
-
-	Related spec scenarios: RS.MSC.13, RS.MSC.14, RS.MSC.15, RS.MSC.16, RS.MSC.17, RS.MSC.18, RS.MSC.19
-*/
-
-func TestRuntimeRequestSourceFactory(t *testing.T) {
-	t.Parallel()
-
-	factory := &runtimeRequestSourceFactory{}
-
-	// Create a proper HTTP request with parsed URL
-	req, err := http.NewRequest("GET", "http://example.com/test?page=1&limit=10", nil)
-	require.NoError(t, err, "Failed to create request")
-	// Set headers with lowercased keys to match runtime.RequestSource's lowercasing
-	req.Header["content-type"] = []string{"application/json"}
-	req.Header["x-api-key"] = []string{"secret"}
-	req.AddCookie(&http.Cookie{Name: "session", Value: "abc123"})
-	req.AddCookie(&http.Cookie{Name: "user", Value: "john"})
-
-	pathParams := map[string]string{
-		"id":   "123",
-		"name": "test",
-	}
-
-	source := factory.NewRequestSource(req, pathParams)
-	require.NotNil(t, source, "NewRequestSource should return non-nil DataSource")
-
-	// Test accessing path parameters
-	val, ok := source.Get("path.id")
-	assert.True(t, ok, "Should find path parameter 'id'")
-	assert.Equal(t, "123", val, "Path parameter value should match")
-
-	val, ok = source.Get("path.name")
-	assert.True(t, ok, "Should find path parameter 'name'")
-	assert.Equal(t, "test", val)
-
-	// Test accessing query parameters (single value returns string)
-	val, ok = source.Get("query.page")
-	assert.True(t, ok, "Should find query parameter 'page'")
-	assert.Equal(t, "1", val, "Query param value should match")
-
-	val, ok = source.Get("query.limit")
-	assert.True(t, ok, "Should find query parameter 'limit'")
-	assert.Equal(t, "10", val)
-
-	// Test accessing headers (category "header", keys lowercased)
-	val, ok = source.Get("header.content-type")
-	assert.True(t, ok, "Should find header 'content-type'")
-	assert.Equal(t, "application/json", val)
-
-	val, ok = source.Get("header.x-api-key")
-	assert.True(t, ok, "Should find header 'x-api-key'")
-	assert.Equal(t, "secret", val)
-
-	// Test accessing cookies (category "cookie")
-	val, ok = source.Get("cookie.session")
-	assert.True(t, ok, "Should find cookie 'session'")
-	assert.Equal(t, "abc123", val, "Cookie value should match")
-
-	val, ok = source.Get("cookie.user")
-	assert.True(t, ok, "Should find cookie 'user'")
-	assert.Equal(t, "john", val)
-
-	// Test non-existent paths
-	val, ok = source.Get("path.nonexistent")
-	assert.False(t, ok, "Should not find non-existent path parameter")
-	assert.Nil(t, val)
-
-	val, ok = source.Get("query.missing")
-	assert.False(t, ok, "Should not find non-existent query parameter")
-	assert.Nil(t, val)
-}
-
-/*
-	Scenario: runtimeStateSourceFactory creates DataSource for server state
-	Given a StateStore with some data
-	When NewStateSource is called with a namespace
-	Then it should return a DataSource that provides access to state data
-
-	Related spec scenarios: RS.MSC.18
-*/
-
-func TestRuntimeStateSourceFactory(t *testing.T) {
-	t.Parallel()
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	store := NewMockStateStore(ctrl)
-	store.EXPECT().GetNamespace("testns").Return(map[string]any{
-		"key1": "value1",
-		"key2": 42,
-		"nested": map[string]any{
-			"subkey": "subvalue",
-		},
-	})
-	store.EXPECT().GetNamespace("nonexistent").Return(nil)
-
-	factory := newRuntimeStateSourceFactory(store)
-	source := factory.NewStateSource("testns")
-	require.NotNil(t, source, "NewStateSource should return non-nil DataSource")
-
-	// Test accessing top-level keys
-	val, ok := source.Get("key1")
-	assert.True(t, ok, "Should find top-level key 'key1'")
-	assert.Equal(t, "value1", val)
-
-	val, ok = source.Get("key2")
-	assert.True(t, ok, "Should find top-level key 'key2'")
-	assert.Equal(t, 42, val)
-
-	// Test accessing nested key (runtime.StateSource supports nested traversal)
-	val, ok = source.Get("nested.subkey")
-	assert.True(t, ok, "Should find nested key 'nested.subkey'")
-	assert.Equal(t, "subvalue", val)
-
-	// Test non-existent namespace returns empty data source
-	emptySource := factory.NewStateSource("nonexistent")
-	require.NotNil(t, emptySource, "NewStateSource should return non-nil DataSource even for empty namespace")
-	val, ok = emptySource.Get("any")
-	assert.False(t, ok, "Empty namespace should have no data")
-	assert.Nil(t, val)
-
-	// Test non-existent key
-	val, ok = source.Get("missing")
-	assert.False(t, ok, "Should not find non-existent key")
-	assert.Nil(t, val)
-}
-
-/*
-Scenario: runtimeEnvSourceFactory creates DataSource for environment variables
-Given some environment variables are set
-When NewEnvSource is called
-Then it should return a DataSource that provides access to environment variables
-
-Related spec scenarios: RS.MSC.19
-*/
-func TestRuntimeEnvSourceFactory(t *testing.T) {
-
-	// Set environment variables for this test (cannot run in parallel)
-	t.Setenv("TEST_FOO", "bar")
-	t.Setenv("TEST_NUM", "123")
-	t.Setenv("TEST_EMPTY", "")
-
-	factory := &runtimeEnvSourceFactory{}
-
-	source := factory.NewEnvSource()
-	require.NotNil(t, source, "NewEnvSource should return non-nil DataSource")
-
-	// Test accessing existing environment variables
-	val, ok := source.Get("TEST_FOO")
-	assert.True(t, ok, "Should find env var TEST_FOO")
-	assert.Equal(t, "bar", val)
-
-	val, ok = source.Get("TEST_NUM")
-	assert.True(t, ok, "Should find env var TEST_NUM")
-	assert.Equal(t, "123", val)
-
-	val, ok = source.Get("TEST_EMPTY")
-	assert.True(t, ok, "Should find env var TEST_EMPTY even if empty")
-	assert.Equal(t, "", val)
-
-	// Test non-existent environment variable
-	val, ok = source.Get("TEST_NONEXISTENT")
-	assert.False(t, ok, "Should not find non-existent env var")
-	assert.Nil(t, val)
-}
-
-/*
-	Scenario: runtimeExpressionEvaluatorWrapper correctly delegates to runtime.Evaluator
-	Given a mock runtime.Evaluator
-	When AddSource and Evaluate are called on the wrapper
-	Then they should delegate to the underlying evaluator
-
-	Related spec scenarios: RS.MSC.13, RS.MSC.14, RS.MSC.15, RS.MSC.16, RS.MSC.17, RS.MSC.18, RS.MSC.19
-*/
-
-func TestRuntimeExpressionEvaluatorWrapper(t *testing.T) {
-	t.Parallel()
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockEval := mock_runtime.NewMockEvaluator(ctrl)
-	mockSource := mock_runtime.NewMockDataSource(ctrl)
-
-	// Expect AddSource call with any runtime.DataSource
-	mockEval.EXPECT().AddSource("test", gomock.Any()).Times(1)
-
-	// Expect Evaluate calls
-	mockEval.EXPECT().Evaluate("1 + 1").Return(2, nil).Times(1)
-	mockEval.EXPECT().Evaluate("invalid").Return(nil, fmt.Errorf("evaluation error")).Times(1)
-
-	wrapper := newRuntimeExpressionEvaluatorWrapper(mockEval)
-
-	// Test AddSource
-	wrapper.AddSource("test", mockSource)
-	// Verify mockEval.AddSource expectation satisfied
-
-	// Test Evaluate with successful expression
-	result, err := wrapper.Evaluate("1 + 1")
-	assert.NoError(t, err, "Evaluate should succeed")
-	assert.Equal(t, 2, result, "Evaluate should return correct result")
-
-	// Test Evaluate with error
-	result, err = wrapper.Evaluate("invalid")
-	assert.Error(t, err, "Evaluate should return error")
-	assert.Nil(t, result, "Evaluate should return nil result on error")
 }
