@@ -34,7 +34,7 @@ jobs:
         run: make coverage-unit
       
       - name: Run linter
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           # Pinned to a v2 release matching the .golangci.yml schema in use.
           version: v2.13.2
