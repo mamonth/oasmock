@@ -242,7 +242,7 @@ func (s *Server) selectAndGenerateResponse(r *http.Request, mapping *RouteMappin
 }
 
 // fireExampleTriggers dispatches the x-event-trigger events declared on an
-// OpenAPI response example against the schema's event broker (design D8).
+// OpenAPI response example against the schema's event broker.
 func (s *Server) fireExampleTriggers(example *openapi3.Example, prefix string) {
 	if s.eventBus == nil || example == nil {
 		return

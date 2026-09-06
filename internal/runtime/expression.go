@@ -233,7 +233,7 @@ type EnvSource struct {
 }
 
 // EventSource provides access to the payload of the currently fired event via
-// {$event.*} (design D8). Name is the event identity (named-event name or
+// {$event.*} (design D3). Name is the event identity (named-event name or
 // built-in kind); Data is the event payload. name and data are reserved
 // accessor names: {$event.name} returns the identity, {$event.data} the whole
 // payload, and any other path resolves within the payload fields.

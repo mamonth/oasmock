@@ -47,7 +47,11 @@ func getCachedSchema(schema map[string]any) (*gojsonschema.Schema, error) {
 }
 
 // EvaluateParamsMatch evaluates whether the given params match the conditions.
-func EvaluateParamsMatch(pm ParamsMatch, eval runtime.Evaluator) (bool, error) {
+// An evaluation failure (an expression source unavailable in the context, e.g.
+// {$event.*} on the reply path) fails closed; when verbose is true the failure
+// is logged at warning level (RS.EXT.29), otherwise at debug.
+func EvaluateParamsMatch(pm ParamsMatch, eval runtime.Evaluator, verbose ...bool) (bool, error) {
+	keepVerbose := len(verbose) > 0 && verbose[0]
 	for expr, condition := range pm {
 		// Pre-evaluate the condition value when it is itself a runtime
 		// expression AND the key references the new event/connection contexts
@@ -58,7 +62,7 @@ func EvaluateParamsMatch(pm ParamsMatch, eval runtime.Evaluator) (bool, error) {
 		if str, ok := condition.(string); ok && isFullExpression(str) && referencesNewMatchContext(expr) {
 			resolved, err := eval.Evaluate(str)
 			if err != nil {
-				slog.Debug("EvaluateParamsMatch: condition expression evaluation failed", "expr", expr, "condition", str, "err", err)
+				logMatchEvalFailure(keepVerbose, "EvaluateParamsMatch: condition expression evaluation failed", "expr", expr, "condition", str, "err", err)
 				return false, nil
 			}
 			condition = resolved
@@ -68,7 +72,7 @@ func EvaluateParamsMatch(pm ParamsMatch, eval runtime.Evaluator) (bool, error) {
 		value, err := eval.Evaluate(expr)
 		if err != nil {
 			// If expression cannot be evaluated, treat as mismatch
-			slog.Debug("EvaluateParamsMatch: expression evaluation failed", "expr", expr, "err", err)
+			logMatchEvalFailure(keepVerbose, "EvaluateParamsMatch: expression evaluation failed", "expr", expr, "err", err)
 			return false, nil
 		}
 		slog.Debug("EvaluateParamsMatch: expression evaluated", "expr", expr, "value", value, "condition", condition)
@@ -92,6 +96,17 @@ func EvaluateParamsMatch(pm ParamsMatch, eval runtime.Evaluator) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// logMatchEvalFailure reports a silent match-evaluation failure. Failures are
+// warnings in verbose mode (RS.EXT.29) and debug-level otherwise, so hot paths
+// stay quiet by default and operators can see why a condition never matched.
+func logMatchEvalFailure(verbose bool, msg string, args ...any) {
+	if verbose {
+		slog.Warn(msg, args...)
+		return
+	}
+	slog.Debug(msg, args...)
 }
 
 // referencesNewMatchContext reports whether a condition key references the

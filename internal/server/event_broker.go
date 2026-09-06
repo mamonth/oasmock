@@ -43,7 +43,7 @@ type delaySchedule struct {
 type eventDeliverer func(sub channelSubscription, payload map[string]any)
 
 // eventBroker decouples OpenAPI event triggers from AsyncAPI consumers
-// (design D8). Subscriptions are keyed by match identity + schema scope.
+// (design D3). Subscriptions are keyed by match identity + schema scope.
 type eventBroker struct {
 	mu      sync.RWMutex
 	byEvent map[string][]channelSubscription // identity -> subscriptions
