@@ -145,13 +145,13 @@ func (h *signalRHub) handleStreamInvocation(sc *signalRConnection, env signalREn
 	}))
 
 	// Hold the stream open and register it (RS.SHR.4, RS.SHR.21).
-	h.mu.Lock()
+	h.conns.mu.Lock()
 	sc.streams[env.InvocationID] = &signalRStream{
 		invocationID: env.InvocationID,
 		channelID:    channelID,
 		connID:       sc.id,
 	}
-	h.mu.Unlock()
+	h.conns.mu.Unlock()
 }
 
 // handleInvocation answers a one-shot Invocation by operation ID with a
@@ -181,20 +181,12 @@ func (h *signalRHub) handleInvocation(sc *signalRConnection, env signalREnvelope
 
 // handleCancelInvocation closes an open stream (RS.SHR.17).
 func (h *signalRHub) handleCancelInvocation(sc *signalRConnection, env signalREnvelope) {
-	h.mu.Lock()
+	h.conns.mu.Lock()
 	if st, ok := sc.streams[env.InvocationID]; ok {
-		h.unregisterStream(st)
+		h.conns.unregisterStream(st)
 	}
-	h.mu.Unlock()
+	h.conns.mu.Unlock()
 	h.writeCompletion(sc, env.InvocationID, "")
-}
-
-// unregisterStream removes a stream from its connection registry.
-// The caller must hold h.mu.
-func (h *signalRHub) unregisterStream(st *signalRStream) {
-	if sc, ok := h.conns[st.connID]; ok {
-		delete(sc.streams, st.invocationID)
-	}
 }
 
 // writeCompletion sends a completion envelope.
@@ -226,24 +218,4 @@ func (h *signalRHub) renderOperation(opID string) (int, []byte, error) {
 	specs := loader.MessageSpecsFromAsync(op.Messages)
 	opKey := "signalr:operation:" + opID
 	return h.renderer.RenderMessageSpecs(specs, h.prefix, opKey, InboundMessage{})
-}
-
-// streamDelivery is one snapshotted write to perform after the hub lock is
-// released, so network I/O never blocks other hub operations (negotiate,
-func (h *signalRHub) openStreamsForChannel(channelID string) []map[string]string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	var out []map[string]string
-	for _, sc := range h.conns {
-		for invocationID, st := range sc.streams {
-			if st.channelID == channelID {
-				out = append(out, map[string]string{
-					"connectionId": sc.id,
-					"invocationId": invocationID,
-					"streamId":     st.channelID,
-				})
-			}
-		}
-	}
-	return out
 }

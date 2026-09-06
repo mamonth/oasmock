@@ -64,10 +64,7 @@ func (m *hubManager) hubChannelForAddress(address string) (*signalRHub, string) 
 // hasConnection reports whether a connection id is active on any hub.
 func (m *hubManager) hasConnection(id string) bool {
 	for _, hub := range m.hubs {
-		hub.mu.Lock()
-		_, ok := hub.conns[id]
-		hub.mu.Unlock()
-		if ok {
+		if hub.conns.hasConnection(id) {
 			return true
 		}
 	}
@@ -79,7 +76,7 @@ func (m *hubManager) hasConnection(id string) bool {
 func (m *hubManager) SignalRPush(address string, payload []byte) {
 	hub, channelID := m.hubChannelForAddress(address)
 	if hub != nil {
-		hub.pushToStreams(channelID, payload, channelID)
+		hub.conns.pushToStreams(channelID, payload, channelID)
 	}
 }
 
@@ -112,7 +109,7 @@ func (m *hubManager) Candidates(address string) []ConsumerInfo {
 	}
 	if hub, channelID := m.hubChannelForAddress(address); hub != nil {
 		seen := make(map[string]int) // connectionID -> index in out
-		for _, st := range hub.openStreamsForChannel(channelID) {
+		for _, st := range hub.conns.openStreamsForChannel(channelID) {
 			connID := st["connectionId"]
 			if idx, ok := seen[connID]; ok {
 				out[idx].Streams = append(out[idx].Streams, st)
@@ -122,35 +119,13 @@ func (m *hubManager) Candidates(address string) []ConsumerInfo {
 			out = append(out, ConsumerInfo{
 				ConnectionID: connID,
 				Channel:      address,
-				Query:        hub.connectionMetadata(connID),
-				Headers:      hub.connectionHeaders(connID),
+				Query:        hub.conns.connectionMetadata(connID),
+				Headers:      hub.conns.connectionHeaders(connID),
 				Streams:      []map[string]string{st},
 			})
 		}
 	}
 	return out
-}
-
-// connectionMetadata returns the upgrade-time query metadata of a connection
-// (for {$connection.query.*} evaluation); nil when unknown.
-func (h *signalRHub) connectionMetadata(connID string) map[string][]string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if sc, ok := h.conns[connID]; ok {
-		return sc.query
-	}
-	return nil
-}
-
-// connectionHeaders returns the upgrade-time header metadata of a connection;
-// nil when unknown. Header keys are lower-cased at capture time.
-func (h *signalRHub) connectionHeaders(connID string) map[string][]string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if sc, ok := h.conns[connID]; ok {
-		return sc.headers
-	}
-	return nil
 }
 
 // PushTo delivers a payload to one candidate consumer: its raw ws connection,
@@ -166,5 +141,5 @@ func (m *hubManager) PushTo(consumer ConsumerInfo, address string, payload []byt
 	if hub == nil {
 		return
 	}
-	hub.pushToConnection(consumer.ConnectionID, channelID, payload, channelID)
+	hub.conns.pushToConnection(consumer.ConnectionID, channelID, payload, channelID)
 }

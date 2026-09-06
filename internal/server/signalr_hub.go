@@ -3,9 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/mamonth/oasmock/internal/asyncapi"
@@ -26,8 +24,9 @@ type signalRAvailableTransport struct {
 }
 
 // signalRHub is the SignalR overlay serving a single AsyncAPI document
-// declared with root-level x-signalr (design D7). It depends only on the
-// MessageRenderer surface, never on the whole Server.
+// declared with root-level x-signalr (design D7). It owns the HTTP transport
+// (negotiate/upgrade), the protocol framing and the document model; connection
+// and open-stream state lives in the signalRConnRegistry it delegates to.
 type signalRHub struct {
 	renderer MessageRenderer
 	path     string // hub path, e.g. "/hub"
@@ -40,10 +39,8 @@ type signalRHub struct {
 	// lifecycle notifications (D5).
 	hooks builtInHooks
 
-	mu     sync.Mutex
-	tokens map[string]string // connection token -> connection id
-	conns  map[string]*signalRConnection
-	idSeq  int
+	// conns owns tokens, connections and open streams.
+	conns *signalRConnRegistry
 }
 
 // setHooks wires built-in trigger and lifecycle callbacks into the hub.
@@ -58,7 +55,6 @@ type signalRConnection struct {
 	conn    *websocket.Conn
 	writer  *wsWriter
 	streams map[string]*signalRStream // invocationId -> open stream
-	server  *signalRHub
 	// query/headers capture the upgrade-time metadata for {$connection.*}
 	// evaluation (RS.EXT.27).
 	query   map[string][]string
@@ -80,8 +76,7 @@ func newSignalRHub(renderer MessageRenderer, doc *asyncapi.Document, prefix stri
 		prefix:   prefix,
 		channels: make(map[string]*asyncapi.Channel),
 		ops:      make(map[string]*asyncapi.Operation),
-		tokens:   make(map[string]string),
-		conns:    make(map[string]*signalRConnection),
+		conns:    newSignalRConnRegistry(),
 	}
 	if doc != nil {
 		hub.path = signalRPath(doc)
@@ -149,7 +144,7 @@ func (h *signalRHub) negotiate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "unsupported transport "+transport)
 		return
 	}
-	token, connID := h.issueToken()
+	token, connID := h.conns.issueToken()
 	resp := signalRNegotiate{
 		ConnectionToken:  token,
 		ConnectionID:     connID,
@@ -171,37 +166,6 @@ func isSignalRWebSockets(transport string) bool {
 	return strings.EqualFold(transport, "webSockets") || strings.EqualFold(transport, "websockets")
 }
 
-// issueToken creates and records a connection token.
-func (h *signalRHub) issueToken() (token, connID string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.idSeq++
-	connID = "signalr-" + strconv.Itoa(h.idSeq)
-	token = connID + "-t"
-	h.tokens[token] = connID
-	return token, connID
-}
-
-// consumeToken validates and consumes a token, binding the connection.
-func (h *signalRHub) consumeToken(token string) (string, bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	connID, ok := h.tokens[token]
-	if ok {
-		delete(h.tokens, token)
-	}
-	return connID, ok
-}
-
-// freshToken returns a token for a connection id (no pre-correlation).
-func (h *signalRHub) freshToken() (token, connID string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.idSeq++
-	connID = "signalr-fresh-" + strconv.Itoa(h.idSeq)
-	return connID + "-t", connID
-}
-
 // serveUpgrade handles a WebSocket upgrade to the hub path (RS.SHR.11-13).
 func (h *signalRHub) serveUpgrade(w http.ResponseWriter, r *http.Request) {
 	// Only the WebSockets transport can upgrade (RS.SHR.10).
@@ -214,14 +178,14 @@ func (h *signalRHub) serveUpgrade(w http.ResponseWriter, r *http.Request) {
 	token := idParam
 	if idParam != "" {
 		var ok bool
-		connID, ok = h.consumeToken(idParam)
+		connID, ok = h.conns.consumeToken(idParam)
 		if !ok {
 			writeJSONError(w, http.StatusNotFound, "unknown connection token")
 			return
 		}
 	} else {
 		// Fresh internally generated connection id (RS.SHR.13).
-		_, connID = h.freshToken()
+		_, connID = h.conns.freshToken()
 		token = connID + "-t"
 	}
 
@@ -238,13 +202,10 @@ func (h *signalRHub) serveUpgrade(w http.ResponseWriter, r *http.Request) {
 		conn:    conn,
 		writer:  wr,
 		streams: make(map[string]*signalRStream),
-		server:  h,
 		query:   r.URL.Query(),
 		headers: lowerHeaderKeys(r.Header),
 	}
-	h.mu.Lock()
-	h.conns[connID] = sc
-	h.mu.Unlock()
+	h.conns.register(sc)
 
 	channel := hubDefaultChannel(h)
 	info := ConsumerInfo{
@@ -261,12 +222,10 @@ func (h *signalRHub) serveUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer func() {
-		h.mu.Lock()
 		// The connection's open streams are discarded with the connection
-		// object: removing connID makes them undiscoverable (openStreamsForChannel
-		// iterates h.conns), so no separate stream cleanup is needed.
-		delete(h.conns, connID)
-		h.mu.Unlock()
+		// object: unregistering makes them undiscoverable (openStreamsForChannel
+		// iterates the registry), so no separate stream cleanup is needed.
+		h.conns.unregister(connID)
 		wr.close()
 		if h.hooks.OnDisconnect != nil {
 			h.hooks.OnDisconnect(channel, connID)
@@ -303,5 +262,3 @@ func (s *Server) registerSignalRHubs(r interface {
 		r.Get(hub.upgradePath(), hub.serveUpgrade)
 	}
 }
-
-// openStreamsForChannel returns open-stream descriptions for a channel.

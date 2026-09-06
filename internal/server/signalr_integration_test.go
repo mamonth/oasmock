@@ -320,7 +320,7 @@ func TestSignalR_PushToOpenStream(t *testing.T) {
 	require.NoError(t, err) // snapshot
 
 	hub := srv.hubMgr.hubs[0]
-	hub.pushToStreams("priceFeed", []byte(`{"symbol":"BTC","price":60000}`), "priceFeed")
+	hub.conns.pushToStreams("priceFeed", []byte(`{"symbol":"BTC","price":60000}`), "priceFeed")
 
 	_, msg, err := conn.ReadMessage()
 	require.NoError(t, err)
@@ -350,7 +350,7 @@ func TestSignalR_PushWithoutOpenStream(t *testing.T) {
 	// No stream opened: place a marker by sending a ping after which we expect
 	// only the server Invocation for the push.
 	hub := srv.hubMgr.hubs[0]
-	hub.pushToStreams("priceFeed", []byte(`{"symbol":"BTC","price":60000}`), "priceFeed")
+	hub.conns.pushToStreams("priceFeed", []byte(`{"symbol":"BTC","price":60000}`), "priceFeed")
 
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	_, msg, err := conn.ReadMessage()
