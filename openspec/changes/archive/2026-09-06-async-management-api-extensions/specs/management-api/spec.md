@@ -40,7 +40,7 @@ The `POST /_mock/examples` request SHALL reject field combinations that mix or m
 - **WHEN** a POST request includes both `interval` and an event-based `match`, or an `interval` that is not a positive integer
 - **THEN** the server responds with HTTP 400
 
-#### Scenario RS.MAPI.34: Non-event match on an async target
+#### Scenario RS.MAPI.35: Non-event match on an async target
 - **WHEN** a POST request includes an AsyncAPI target and a `match` whose conditions reference only `{$connection.*}` (or literal values) with no `{$event.*}` reference
 - **THEN** the server responds with HTTP 400 and registers nothing (a runtime example needs a trigger; a connection-only match has none)
 

@@ -146,7 +146,7 @@ func (r *exampleRegistry) exampleEligible(ex dynamicExample, eval runtime.Evalua
 	if len(ex.conditions) == 0 {
 		return true
 	}
-	matched, err := extensions.EvaluateParamsMatch(extensions.ParamsMatch(ex.conditions), eval)
+	matched, err := extensions.EvaluateParamsMatch(extensions.ParamsMatch(ex.conditions), eval, r.verbose)
 	return err == nil && matched
 }
 

@@ -129,7 +129,7 @@ func (e *exampleEngine) SelectAsyncExample(message *loader.MessageSpec, evaluato
 			continue
 		}
 		if match, ok := extensions.ValueMatch(view); ok {
-			matched, err := extensions.EvaluateParamsMatch(extensions.ParamsMatch(match), evaluator)
+			matched, err := extensions.EvaluateParamsMatch(extensions.ParamsMatch(match), evaluator, e.verbose)
 			if err != nil || !matched {
 				continue
 			}

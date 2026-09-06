@@ -37,7 +37,7 @@ func ExtractHeaders(ex *openapi3.Example) (map[string]any, bool) {
 	return ValueHeaders(OpenAPIExampleValue(ex))
 }
 
-// EventTrigger is a single x-event-trigger entry (design D8).
+// EventTrigger is a single x-event-trigger entry.
 type EventTrigger struct {
 	// Name is the named event fired when the example is selected.
 	Name string

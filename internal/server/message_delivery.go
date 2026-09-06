@@ -14,7 +14,7 @@ import (
 
 // messageDelivery renders and delivers subscribed AsyncAPI message examples
 // through the MessageRenderer and ConsumerBus contracts. It is the cohesive
-// delivery engine behind the event driver (design D8): it owns the sources of
+// delivery engine behind the event driver (design D6): it owns the sources of
 // per-emission rendering (state, env, event, connection), the recipient
 // partition, the delayed-emission cancellation and the push/observer side
 // effects. It never reaches into Server or the broker/scheduler registries.
@@ -157,7 +157,7 @@ func (d *messageDelivery) evaluateConnectionBucket(bucket extensions.ParamsMatch
 		return true, nil
 	}
 	eval := d.eventEvaluator(state, env, eventName, payload, connectionSourceFromInfo(candidate))
-	return extensions.EvaluateParamsMatch(bucket, eval)
+	return extensions.EvaluateParamsMatch(bucket, eval, d.verbose)
 }
 
 // deliverExample runs the shared selection + render + recipient-partition
@@ -177,7 +177,7 @@ func (d *messageDelivery) deliverExample(sub channelSubscription, examples []*lo
 		}
 		evaluator := d.eventEvaluator(state, env, eventName, payload, connSource)
 		if len(common) > 0 {
-			ok, cErr := extensions.EvaluateParamsMatch(common, evaluator)
+			ok, cErr := extensions.EvaluateParamsMatch(common, evaluator, d.verbose)
 			if cErr != nil || !ok {
 				continue
 			}

@@ -164,7 +164,7 @@ func (e *exampleEngine) selectFromBucket(bucket map[string]*openapi3.Example, ke
 		}
 		if requireMatch {
 			pm, _ := extensions.ExtractParamsMatch(ex)
-			matched, err := extensions.EvaluateParamsMatch(pm, eval)
+			matched, err := extensions.EvaluateParamsMatch(pm, eval, e.verbose)
 			if err != nil {
 				if e.verbose {
 					slog.Debug("Error evaluating params-match", "example", k, "error", err)

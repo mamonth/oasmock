@@ -11,7 +11,7 @@ import (
 	"github.com/mamonth/oasmock/internal/loader"
 )
 
-// eventBus orchestrates the event driver (design D8). It owns the subscription
+// eventBus orchestrates the event driver (design D3). It owns the subscription
 // broker and the interval scheduler, and delegates message rendering/delivery
 // to the messageDelivery engine. It never reaches into Server.
 type eventBus struct {
