@@ -70,6 +70,30 @@ jobs:
         with:
           name: spec-coverage-report
           path: coverage_report.md
+
+  spec-validation:
+    name: Spec Validation (Spectral + codegen freshness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Lint OpenAPI (sync) and AsyncAPI (async) specs
+        run: npx --yes @stoplight/spectral-cli@6.14.3 lint api/openapi.yaml api/asyncapi.yaml
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Ensure generated request schema matches the OpenAPI contract
+        run: |
+          go run ./cmd/gen-control-schema -in api/openapi.yaml -out internal/server/add_example_request_schema_gen.go -pkg server
+          git diff --exit-code -- internal/server/add_example_request_schema_gen.go
   
   build:
     name: Build Binaries

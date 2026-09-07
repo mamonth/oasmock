@@ -63,6 +63,63 @@ func TestHTTPProtocolAdapter_RendersMessage(t *testing.T) {
 }
 
 /*
+Scenario: Async reply-context conditions on a dynamic example are honored
+Given an AsyncAPI http channel with a management-injected dynamic example whose
+conditions reference the reply context ({$message.payload.*})
+When a matching inbound message arrives
+Then the dynamic example is selected and its body rendered; a non-matching
+message falls through without selecting it
+
+Related spec scenarios: RS.MAPI.36, RS.MAPI.20
+*/
+func TestAsyncDynamicExample_ReplyContextConditionsHonored(t *testing.T) {
+	t.Parallel()
+
+	srv, _, stateStore, _ := newMockedServerWithGeneratedMocks(t, Config{HistorySize: DefaultHistorySize})
+	stateStore.EXPECT().GetNamespace(gomock.Any()).Return(map[string]any{}).AnyTimes()
+
+	mapping := &RouteMapping{
+		Protocol:   asyncapi.ProtocolHTTP,
+		Method:     http.MethodPost,
+		ChiPattern: "/employees",
+		Pattern:    "/employees",
+		Messages:   nil, // no spec messages: the dynamic example is the only reply
+	}
+
+	// Register a management-injected dynamic example guarded by a reply-context
+	// ({$message.*}) condition (RS.MAPI.36).
+	key := routeKey(mapping.Method, mapping.ChiPattern)
+	srv.registry.addDynamic(key, dynamicExample{
+		onceID:     "dynex-1",
+		conditions: map[string]any{"{$message.payload.kind}": "urgent"},
+		response: struct {
+			code    int
+			headers map[string]string
+			body    any
+		}{code: 200, body: map[string]any{"dyn": "yes"}},
+	})
+
+	adapter := srv.adapterForProtocol(asyncapi.ProtocolHTTP)
+	require.NotNil(t, adapter)
+	handler := adapter.Handler(mapping, srv.asyncMessageHandler(mapping))
+
+	// A matching message selects the dynamic example.
+	rec := httptest.NewRecorder()
+	handler(rec, httptest.NewRequest(http.MethodPost, "/employees", strings.NewReader(`{"kind":"urgent","id":7}`)))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var matched map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &matched))
+	assert.Equal(t, "yes", matched["dyn"])
+
+	// A non-matching message does not select the dynamic example (no spec
+	// messages exist, so the reply is empty).
+	rec2 := httptest.NewRecorder()
+	handler(rec2, httptest.NewRequest(http.MethodPost, "/employees", strings.NewReader(`{"kind":"normal","id":7}`)))
+	assert.Equal(t, http.StatusOK, rec2.Code)
+	assert.Empty(t, rec2.Body.String())
+}
+
+/*
 Scenario: HTTP adapter ack send with no reply message
 Given an AsyncAPI http channel whose operation has no reply message
 When the adapter handler is invoked

@@ -9,6 +9,7 @@
 *.out
 *.prof
 vendor/
+/gen-control-schema
 
 # Node
 node_modules/

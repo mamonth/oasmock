@@ -71,8 +71,8 @@ func TestAddExampleValidation_PathAndChannel(t *testing.T) {
 }
 
 /*
-Scenario: match or interval on an OpenAPI target is rejected
-Given a POST with path and match but no AsyncAPI target
+Scenario: Async-only fields on an OpenAPI target are rejected
+Given a POST with path and an async-only timing field (interval) but no AsyncAPI target
 When /_mock/examples is invoked
 Then the server responds with HTTP 400
 
@@ -85,7 +85,7 @@ func TestAddExampleValidation_AsyncFieldsOnSyncedPath(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 
-	body := `{"path":"/users","match":{"{$event.name}":"x"},"response":{"code":200,"body":{"a":1}}}`
+	body := `{"path":"/users","interval":100,"response":{"code":200,"body":{"a":1}}}`
 	resp := postExample(t, ts.URL, body)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -106,7 +106,7 @@ func TestAddExampleValidation_DualTriggers(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 
-	body := `{"channel":"/alerts","interval":100,"match":{"{$event.name}":"x"},"response":{"code":200,"body":{"a":1}}}`
+	body := `{"channel":"/alerts","interval":100,"conditions":{"{$event.name}":"x"},"response":{"code":200,"body":{"a":1}}}`
 	resp := postExample(t, ts.URL, body)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -151,7 +151,7 @@ func TestAddExampleValidation_NonEventMatchRejected(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 
-	body := `{"channel":"/alerts","match":{"{$connection.channel}":"/alerts"},"response":{"code":200,"body":{"a":1}}}`
+	body := `{"channel":"/alerts","conditions":{"{$connection.channel}":"/alerts"},"response":{"code":200,"body":{"a":1}}}`
 	resp := postExample(t, ts.URL, body)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -174,7 +174,7 @@ func TestAddExampleValidation_ConnectionMatchWithEventValueAccepted(t *testing.T
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 
-	body := `{"channel":"/alerts","match":{"{$connection.id}":"{$event.connectionId}"},"response":{"code":200,"body":{"a":1}}}`
+	body := `{"channel":"/alerts","conditions":{"{$connection.id}":"{$event.connectionId}"},"response":{"code":200,"body":{"a":1}}}`
 	resp := postExample(t, ts.URL, body)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -195,7 +195,7 @@ func TestAddExampleValidation_LiteralOnlyMatchRejected(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 
-	body := `{"channel":"/alerts","match":{"kind":"tick"},"response":{"code":200,"body":{"a":1}}}`
+	body := `{"channel":"/alerts","conditions":{"kind":"tick"},"response":{"code":200,"body":{"a":1}}}`
 	resp := postExample(t, ts.URL, body)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -228,7 +228,7 @@ func TestAddExampleValidation_EventMatchWithDelayAccepted(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 
-	body := `{"channel":"/alerts","delay":10,"match":{"{$event.name}":"levelUp"},"response":{"code":200,"body":{"a":1}}}`
+	body := `{"channel":"/alerts","delay":10,"conditions":{"{$event.name}":"levelUp"},"response":{"code":200,"body":{"a":1}}}`
 	resp := postExample(t, ts.URL, body)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -251,7 +251,7 @@ func TestAddExampleValidation_ValidShapesPass(t *testing.T) {
 
 	tests := []string{
 		`{"channel":"/alerts","response":{"code":200,"body":{"a":1}}}`,
-		`{"channel":"/alerts","match":{"{$event.name}":"levelUp"},"response":{"code":200,"body":{"a":1}}}`,
+		`{"channel":"/alerts","conditions":{"{$event.name}":"levelUp"},"response":{"code":200,"body":{"a":1}}}`,
 		`{"channel":"/alerts","interval":200,"response":{"code":200,"body":{"a":1}}}`,
 		`{"channel":"/alerts","delay":10,"response":{"code":200,"body":{"a":1}}}`,
 	}
@@ -281,9 +281,9 @@ func TestAddExampleValidation_ErrorEnvelopeIsValidJSON(t *testing.T) {
 	defer ts.Close() //nolint:errcheck
 
 	invalidBodies := []string{
-		`{"path":"/users","channel":"/alerts","response":{"code":200,"body":{"a":1}}}`,                              // oneOf violation
-		`{"channel":"/alerts","interval":100,"match":{"{$event.name}":"x"},"response":{"code":200,"body":{"a":1}}}`, // dual trigger
-		`{"path":"/does-not-exist","response":{"code":200}}`,                                                        // no matching route
+		`{"path":"/users","channel":"/alerts","response":{"code":200,"body":{"a":1}}}`,                                   // oneOf violation
+		`{"channel":"/alerts","interval":100,"conditions":{"{$event.name}":"x"},"response":{"code":200,"body":{"a":1}}}`, // dual trigger
+		`{"path":"/does-not-exist","response":{"code":200}}`,                                                             // no matching route
 		`not-json`, // malformed body
 	}
 	for _, body := range invalidBodies {
@@ -334,6 +334,33 @@ func TestAddExampleValidation_ValidateFlag(t *testing.T) {
 	resp3 := postExample(t, ts.URL, `{"path":"/validate","method":"POST","response":{"code":200,"body":{"kind":"ok","count":1,"tags":["a"]}}}`)
 	defer resp3.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp3.StatusCode, "a conforming body must pass validation")
+}
+
+/*
+Scenario: The removed match field is rejected
+Given a POST /_mock/examples body carrying the removed async-only match field
+When the server processes it
+Then it responds with HTTP 400 and registers nothing (RS.MAPI.37)
+
+Related spec scenarios: RS.MAPI.37
+*/
+func TestAddExampleValidation_RemovedMatchFieldRejected(t *testing.T) {
+	t.Parallel()
+
+	srv := newPushServer(t)
+	ts := httptest.NewServer(srv.router)
+	defer ts.Close() //nolint:errcheck
+
+	bodies := []string{
+		`{"path":"/users","match":{"{$event.name}":"orderCreated"},"response":{"code":200,"body":{"a":1}}}`,
+		`{"channel":"/alerts","match":{"{$event.name}":"levelUp"},"response":{"code":200,"body":{"a":1}}}`,
+	}
+	for _, body := range bodies {
+		resp := postExample(t, ts.URL, body)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "body=%s", body)
+		resp.Body.Close() //nolint:errcheck
+	}
+	assertNoRuntimeExampleRegistered(t, srv, "a removed match field must not register a runtime example")
 }
 
 /*

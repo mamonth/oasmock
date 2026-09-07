@@ -1,6 +1,6 @@
 # Makefile for oasmock
 
-.PHONY: help build build-cross test test-unit test-integration lint clean coverage-unit spec-coverage docker-build
+.PHONY: help build build-cross test test-unit test-integration lint clean coverage-unit spec-coverage docker-build validate-spec check-generated
 
 # Default target
 all: build
@@ -19,6 +19,8 @@ help:
 	@echo "  generate       - run go generate"
 	@echo "  coverage-unit  - run test coverage check for unit tests only"
 	@echo "  spec-coverage  - check requirement scenario coverage"
+	@echo "  validate-spec  - lint the management API specs with Spectral"
+	@echo "  check-generated - regenerate the request schema and verify it matches"
 	@echo "  docker-build   - build Docker image from local binary"
 
 # Install dependencies
@@ -77,6 +79,16 @@ docker-build:
 # Generate code
 generate:
 	go generate ./...
+
+# Lint the management API specs (OpenAPI + AsyncAPI) with Spectral
+validate-spec:
+	npx --yes @stoplight/spectral-cli@6.14.3 lint api/openapi.yaml api/asyncapi.yaml
+
+# Regenerate the AddExampleRequest schema from openapi.yaml and fail if the
+# committed artifact drifted from the OpenAPI contract
+check-generated:
+	go run ./cmd/gen-control-schema -in api/openapi.yaml -out internal/server/add_example_request_schema_gen.go -pkg server
+	git diff --exit-code -- internal/server/add_example_request_schema_gen.go
 
 # Install golangci-lint (if not present)
 install-lint:

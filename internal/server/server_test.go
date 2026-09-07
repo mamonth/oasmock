@@ -61,9 +61,10 @@ func newMockedServerWithGeneratedMocks(t *testing.T, config Config) (*Server, *M
 Scenario: Validating add‑example request JSON
 Given a JSON string representing an add‑example request
 When validateAddExampleRequest is called
-Then it returns error for missing required fields or invalid data, nil for valid requests
+Then it returns error for missing required fields, mixed sync/async targeting,
+or invalid data, nil for valid requests
 
-Related spec scenarios: RS.MAPI.14
+Related spec scenarios: RS.MAPI.14, RS.MAPI.27, RS.MAPI.28
 */
 func TestValidateAddExampleRequest(t *testing.T) {
 	t.Parallel()
@@ -111,6 +112,16 @@ func TestValidateAddExampleRequest(t *testing.T) {
 		{
 			name:    "valid with body",
 			json:    `{"path":"/test","response":{"code":200,"body":{"message":"hello"}}}`,
+			wantErr: false,
+		},
+		{
+			name:    "mixed sync and async targeting rejected",
+			json:    `{"path":"/test","channel":"/alerts","response":{"code":200}}`,
+			wantErr: true, // RS.MAPI.27: oneOf must match exactly one branch
+		},
+		{
+			name:    "valid async target with delay",
+			json:    `{"channel":"/alerts","delay":50,"response":{"code":200}}`,
 			wantErr: false,
 		},
 	}
@@ -758,12 +769,13 @@ func TestHandleAddExample(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		reqBody     string
-		mappings    []RouteMapping
-		wantStatus  int
-		wantJSON    map[string]any
-		wantExample bool // whether example should be added
+		name              string
+		reqBody           string
+		mappings          []RouteMapping
+		wantStatus        int
+		wantJSON          map[string]any
+		wantErrorContains string // optional substring check on the error field
+		wantExample       bool   // whether example should be added
 	}{
 		{
 			name:    "valid minimal request",
@@ -804,9 +816,10 @@ func TestHandleAddExample(t *testing.T) {
 				Pattern:    "/test",
 				ChiPattern: "/test",
 			}},
-			wantStatus:  http.StatusBadRequest,
-			wantJSON:    map[string]any{"error": "invalid request: (root): Must validate one and only one schema (oneOf); (root): path is required"},
-			wantExample: false,
+			wantStatus:        http.StatusBadRequest,
+			wantJSON:          map[string]any{"error": "invalid request: (root): Must validate one and only one schema (oneOf)"},
+			wantErrorContains: "path is required",
+			wantExample:       false,
 		},
 		{
 			name:    "no matching route",
@@ -854,6 +867,14 @@ func TestHandleAddExample(t *testing.T) {
 				if key == "id" && expectedValue == "" {
 					// ID should be non-empty for success responses
 					assert.NotEmpty(t, resp[key], "id should not be empty")
+					continue
+				}
+				if key == "error" && tt.wantErrorContains != "" {
+					if errStr, ok := resp[key].(string); ok {
+						assert.Contains(t, errStr, tt.wantErrorContains, "field %s mismatch", key)
+					} else {
+						assert.Equal(t, expectedValue, resp[key], "field %s mismatch", key)
+					}
 					continue
 				}
 				assert.Equal(t, expectedValue, resp[key], "field %s mismatch", key)
