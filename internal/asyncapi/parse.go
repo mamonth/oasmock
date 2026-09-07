@@ -156,6 +156,7 @@ func captureSignalR(doc *Document, data []byte) {
 // signalRKey is the root-level x-signalr extension name.
 const signalRKey = "x-signalr"
 
+//nolint:gocyclo // schema-to-neutral-document field mapping branches
 func mapDocument(raw *benelser.Document) (*Document, error) {
 	doc := &Document{
 		Version: raw.AsyncAPI,
@@ -209,6 +210,8 @@ func mapDocument(raw *benelser.Document) (*Document, error) {
 
 // messageRefs maps the messages of an operation; when the operation declares
 // none it falls back to the referenced channel's messages.
+//
+//nolint:gocyclo // operation/channel message resolution branches
 func messageRefs(op *benelser.Operation) []*Message {
 	var refs []*benelser.MessageRef
 	refs = append(refs, op.Messages...)

@@ -39,6 +39,8 @@ type Trigger struct {
 // declared-but-invalid timing values (a non-positive or fractional
 // x-mock-interval or a negative/fractional x-mock-delay, RS.EXT.22-23) instead
 // of silently reclassifying the example.
+//
+//nolint:gocyclo // strict classification-rejection matrix
 func ClassifyTrigger(ev ExampleValue) (Trigger, error) {
 	var trig Trigger
 	match, hasMatch := ValueMatch(ev)

@@ -3,6 +3,7 @@ package server
 //go:generate mockgen -destination=interfaces_mock_test.go -package=server . RouteProvider,StateStore,HistoryStore,RpcProtocol
 
 import (
+	"github.com/mamonth/oasmock/internal/eventbus"
 	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/history"
 	"github.com/mamonth/oasmock/internal/loader"
@@ -140,6 +141,9 @@ type ConsumerInfo struct {
 	Query        map[string][]string
 	Headers      map[string][]string
 	Streams      []map[string]string
+	// Protocol is the consumer transport: "ws" for raw WebSocket consumers or
+	// "signalr" for SignalR connections (design D7).
+	Protocol string
 }
 
 // ConsumerBus emits rendered payloads to channel consumers (SignalR open
@@ -164,7 +168,7 @@ type ConsumerBus interface {
 // consumes. It is implemented by eventBus so the server and its tests can
 // depend on a narrow contract instead of the concrete bus.
 type asyncDriver interface {
-	fire(name string, payload map[string]any, schema string, global bool, delay *delaySchedule)
+	fire(name string, payload map[string]any, schema string, global bool, delay *eventbus.DelaySchedule)
 	fireTargeted(name string, payload map[string]any, schema string, recipient ConsumerInfo)
 	hasSubscribers(name, schema string) bool
 	doneChannel() <-chan struct{}

@@ -295,7 +295,7 @@ func TestSchemaRegistration_AtomicOnError(t *testing.T) {
 
 	// The valid periodic example ("good") must not have been scheduled, because
 	// the later classification error aborts the whole schema registration.
-	assert.False(t, bus.scheduler.started("interval---/alerts-good"),
+	assert.False(t, bus.scheduler.Started("interval---/alerts-good"),
 		"no periodic job may be scheduled when schema registration fails")
 }
 
@@ -407,7 +407,7 @@ func TestSchemaRegistration_XSendEventsSilentlyIgnored(t *testing.T) {
 
 	// Neither legacy key may register anything: the named entry would surface
 	// as a "legacyAlert" subscription, the cron entry as an interval job.
-	assert.Len(t, bus.broker.byEvent, 0, "x-send-events must not register any event subscription")
-	assert.False(t, bus.scheduler.started("interval---/alerts-cron"),
+	assert.Equal(t, 0, bus.broker.SubscriptionCount(), "x-send-events must not register any event subscription")
+	assert.False(t, bus.scheduler.Started("interval---/alerts-cron"),
 		"x-send-events cron must not schedule an interval job")
 }

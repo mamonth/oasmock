@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Protocol-neutral async management prefix `/_mock/async/{push,consumers,disconnect}`
+- Spectral-based CI validation for both management API specs (`api/openapi.yaml` sync REST + `api/asyncapi.yaml` async stream)
 - Unified example injection: `POST /_mock/examples` gains `match`/`interval`/`delay` for AsyncAPI targets (runtime mirror of `x-mock-match`/`x-mock-interval`/`x-mock-delay`), with strict context-aware validation, plus `DELETE /_mock/examples/{exampleId}` to remove and cancel recurrence
 - Single event resource `POST /_mock/events` firing a named event by its `name` identity (the `{$event.name}` matched by event-driven examples)
 - Management WebSocket stream `/_mock/stream` with connect-time `events`/`channels` filters; pushes `event`/`push`/`consumer`/`schedule` envelopes
@@ -18,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Consumers listable without a `channel` filter — flat union across all channels (raw ws + SignalR streams)
 
 ### Changed
+- `AddExampleRequest` refactored into an abstract `NewExampleRequestBase` plus concrete `NewExampleRequestSync`/`NewExampleRequestAsync` schemas composed through `allOf`, selected by a `oneOf` on `AddExampleRequest` — same rejection semantics, cleaner target-kind partitioning
+- The Go runtime validator for `POST /_mock/examples` is no longer hand-written: it is generated from `api/openapi.yaml` (`components.schemas.AddExampleRequest`) by `gen-control-schema`, keeping the OpenAPI document the single source of truth (regenerate with `make generate`, freshness enforced in CI)
+- Each RPC procedure's own path is now mounted as a route, so a procedure may
+  be invoked at `/rpc/users/123` as well as at the gateway; path parameters
+  resolve through chi via the procedure's brace-form pattern (RS.JRP.34)
 - Recurring delivery moved off the schedule endpoint onto `interval` on `/_mock/examples`
 - `AddExampleRequest` is now a `oneOf` two-branch schema (sync `path` vs async `channel`) rejecting mixed targeting
 - Delivered/scheduled messages are templated at emission time so `{$event.*}`/`{$state.*}`/`{$env.*}` resolve against current state

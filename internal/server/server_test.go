@@ -61,9 +61,10 @@ func newMockedServerWithGeneratedMocks(t *testing.T, config Config) (*Server, *M
 Scenario: Validating add‑example request JSON
 Given a JSON string representing an add‑example request
 When validateAddExampleRequest is called
-Then it returns error for missing required fields or invalid data, nil for valid requests
+Then it returns error for missing required fields, mixed sync/async targeting,
+or invalid data, nil for valid requests
 
-Related spec scenarios: RS.MAPI.14
+Related spec scenarios: RS.MAPI.14, RS.MAPI.27, RS.MAPI.28
 */
 func TestValidateAddExampleRequest(t *testing.T) {
 	t.Parallel()
@@ -111,6 +112,16 @@ func TestValidateAddExampleRequest(t *testing.T) {
 		{
 			name:    "valid with body",
 			json:    `{"path":"/test","response":{"code":200,"body":{"message":"hello"}}}`,
+			wantErr: false,
+		},
+		{
+			name:    "mixed sync and async targeting rejected",
+			json:    `{"path":"/test","channel":"/alerts","response":{"code":200}}`,
+			wantErr: true, // RS.MAPI.27: oneOf must match exactly one branch
+		},
+		{
+			name:    "valid async target with delay",
+			json:    `{"channel":"/alerts","delay":50,"response":{"code":200}}`,
 			wantErr: false,
 		},
 	}
@@ -483,7 +494,7 @@ func TestReplaceEmbeddedExpressions(t *testing.T) {
 Scenario: Extracting path parameters from HTTP request
 Given an HTTP request with Chi route context containing URL parameters
 When extractPathParams is called
-Then it returns a map with parameter names and values
+Then it returns a map with parameter names and values only when chi populated them
 
 Related spec scenarios: RS.MSC.5
 */
@@ -516,13 +527,13 @@ func TestExtractPathParams(t *testing.T) {
 			want:    map[string]string{},
 		},
 		{
-			name: "no chi context but mapping chi pattern has params",
+			name: "no chi context yields no params even with a parameterized pattern",
 			setupRequest: func() *http.Request {
 				req, _ := http.NewRequest(http.MethodGet, "/users/123", nil)
 				return req
 			},
 			mapping: &RouteMapping{ChiPattern: "/users/{id}"},
-			want:    map[string]string{"id": "123"},
+			want:    map[string]string{},
 		},
 		{
 			name: "with path parameters",
@@ -758,12 +769,13 @@ func TestHandleAddExample(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		reqBody     string
-		mappings    []RouteMapping
-		wantStatus  int
-		wantJSON    map[string]any
-		wantExample bool // whether example should be added
+		name              string
+		reqBody           string
+		mappings          []RouteMapping
+		wantStatus        int
+		wantJSON          map[string]any
+		wantErrorContains string // optional substring check on the error field
+		wantExample       bool   // whether example should be added
 	}{
 		{
 			name:    "valid minimal request",
@@ -804,9 +816,10 @@ func TestHandleAddExample(t *testing.T) {
 				Pattern:    "/test",
 				ChiPattern: "/test",
 			}},
-			wantStatus:  http.StatusBadRequest,
-			wantJSON:    map[string]any{"error": "invalid request: (root): Must validate one and only one schema (oneOf); (root): path is required"},
-			wantExample: false,
+			wantStatus:        http.StatusBadRequest,
+			wantJSON:          map[string]any{"error": "invalid request: (root): Must validate one and only one schema (oneOf)"},
+			wantErrorContains: "path is required",
+			wantExample:       false,
 		},
 		{
 			name:    "no matching route",
@@ -854,6 +867,14 @@ func TestHandleAddExample(t *testing.T) {
 				if key == "id" && expectedValue == "" {
 					// ID should be non-empty for success responses
 					assert.NotEmpty(t, resp[key], "id should not be empty")
+					continue
+				}
+				if key == "error" && tt.wantErrorContains != "" {
+					if errStr, ok := resp[key].(string); ok {
+						assert.Contains(t, errStr, tt.wantErrorContains, "field %s mismatch", key)
+					} else {
+						assert.Equal(t, expectedValue, resp[key], "field %s mismatch", key)
+					}
 					continue
 				}
 				assert.Equal(t, expectedValue, resp[key], "field %s mismatch", key)
@@ -1909,14 +1930,59 @@ func TestSelectResponse(t *testing.T) {
 }
 
 /*
-	Scenario: parseStatusCode converts status code string to int
-	Given a status code string
-	When parseStatusCode is called
-	Then it should return the appropriate integer status code
+Scenario: responseOrder gives a declarative total order over response keys
+Given pairs of response-status keys (numeric, default, non-numeric)
+When responseOrder compares them
+Then numeric codes sort ascending, "default" last, non-numeric fallback lexical
 
-	Related spec scenarios: RS.MSC.27
+Related spec scenarios: RS.MSC.8, RS.MSC.9
 */
+func TestResponseOrder(t *testing.T) {
+	t.Parallel()
 
+	tests := []struct {
+		name string
+		a, b string
+		want int // sign of expected comparison
+	}{
+		{name: "numeric ascending", a: "200", b: "201", want: -1},
+		{name: "numeric descending reversed", a: "500", b: "404", want: 1},
+		{name: "numeric before default", a: "200", b: "default", want: -1},
+		{name: "default after numeric", a: "default", b: "200", want: 1},
+		{name: "default equals default", a: "default", b: "default", want: 0},
+		{name: "numeric before non-numeric", a: "200", b: "foo", want: -1},
+		{name: "non-numeric after numeric", a: "bar", b: "200", want: 1},
+		{name: "non-numeric lexical", a: "abc", b: "abd", want: -1},
+		{name: "non-numeric lexical reversed", a: "zed", b: "aaa", want: 1},
+		{name: "non-numeric equal", a: "xyz", b: "xyz", want: 0},
+		{name: "default last over non-numeric", a: "default", b: "abc", want: 1},
+		{name: "non-numeric before default", a: "abc", b: "default", want: -1},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := responseOrder(tt.a, tt.b)
+			if tt.want < 0 {
+				assert.Negative(t, got)
+			} else if tt.want > 0 {
+				assert.Positive(t, got)
+			} else {
+				assert.Zero(t, got)
+			}
+		})
+	}
+}
+
+/*
+Scenario: parseStatusCode converts status code string to int
+Given a status code string
+When parseStatusCode is called
+Then it should return the appropriate integer status code
+
+Related spec scenarios: RS.MSC.27
+*/
 func TestParseStatusCode(t *testing.T) {
 	t.Parallel()
 

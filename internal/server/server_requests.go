@@ -10,33 +10,43 @@ import (
 func filterRecords(records []RequestRecord, query url.Values) []RequestRecord {
 	filtered := make([]RequestRecord, 0, len(records))
 	for _, rec := range records {
-		// Filter by path
-		if path := query.Get("path"); path != "" && rec.Path != path {
-			continue
+		if recordMatchesFilter(rec, query) {
+			filtered = append(filtered, rec)
 		}
-		// Filter by method
-		if method := query.Get("method"); method != "" && rec.Method != method {
-			continue
-		}
-		// Filter by time_from (milliseconds since epoch)
-		if timeFromStr := query.Get("time_from"); timeFromStr != "" {
-			if timeFrom, err := strconv.ParseInt(timeFromStr, 10, 64); err == nil {
-				if rec.Timestamp.UnixMilli() < timeFrom {
-					continue
-				}
-			}
-		}
-		// Filter by time_till
-		if timeTillStr := query.Get("time_till"); timeTillStr != "" {
-			if timeTill, err := strconv.ParseInt(timeTillStr, 10, 64); err == nil {
-				if rec.Timestamp.UnixMilli() > timeTill {
-					continue
-				}
-			}
-		}
-		filtered = append(filtered, rec)
 	}
 	return filtered
+}
+
+// recordMatchesFilter reports whether a record satisfies every filter in query.
+func recordMatchesFilter(rec RequestRecord, query url.Values) bool {
+	return matchesStringFilter(rec.Path, query.Get("path")) &&
+		matchesStringFilter(rec.Method, query.Get("method")) &&
+		matchesTimeFilter(rec.Timestamp.UnixMilli(), "time_from", query, false) &&
+		matchesTimeFilter(rec.Timestamp.UnixMilli(), "time_till", query, true)
+}
+
+// matchesStringFilter reports whether the value equals the query filter, or the
+// filter is empty (unset filters always match).
+func matchesStringFilter(value, filter string) bool {
+	return filter == "" || value == filter
+}
+
+// matchesTimeFilter reports whether the timestamp satisfies a millisecond
+// range filter. When after is true the timestamp must not exceed the bound;
+// otherwise it must not precede it. Malformed bounds are ignored.
+func matchesTimeFilter(ts int64, key string, query url.Values, after bool) bool {
+	raw := query.Get(key)
+	if raw == "" {
+		return true
+	}
+	bound, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return true
+	}
+	if after {
+		return ts <= bound
+	}
+	return ts >= bound
 }
 
 // paginateRecords applies offset and limit pagination to records.

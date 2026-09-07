@@ -53,30 +53,9 @@ func (e *exampleEngine) selectResponse(mapping *RouteMapping, eval runtime.Evalu
 	for code := range respMap {
 		keys = append(keys, code)
 	}
-	// Sort keys with custom order: numeric status codes ascending, "default" last
-	slices.SortFunc(keys, func(a, b string) int {
-		if a == "default" && b == "default" {
-			return 0
-		}
-		if a == "default" {
-			return 1 // default after numeric codes
-		}
-		if b == "default" {
-			return -1
-		}
-		aInt, errA := strconv.Atoi(a)
-		bInt, errB := strconv.Atoi(b)
-		if errA != nil && errB != nil {
-			return strings.Compare(a, b) // fallback lexical
-		}
-		if errA != nil {
-			return 1 // non-numeric after numeric
-		}
-		if errB != nil {
-			return -1
-		}
-		return cmp.Compare(aInt, bInt)
-	})
+	// Sort keys with a declarative total order: numeric status codes ascending,
+	// then "default" last, then any non-numeric key lexically.
+	slices.SortFunc(keys, responseOrder)
 	// Iterate sorted keys
 	for _, code := range keys {
 		resp := respMap[code]
@@ -85,6 +64,30 @@ func (e *exampleEngine) selectResponse(mapping *RouteMapping, eval runtime.Evalu
 		}
 	}
 	return "", nil
+}
+
+// responseOrder is a pure total order over response-status keys: numeric codes
+// ascending, then non-numeric keys lexically, with "default" last so the mock
+// prefers explicit statuses over the catch-all when one is declared.
+func responseOrder(a, b string) int {
+	aInt, aErr := strconv.Atoi(a)
+	bInt, bErr := strconv.Atoi(b)
+	switch {
+	case aErr == nil && bErr == nil:
+		return cmp.Compare(aInt, bInt)
+	case aErr == nil:
+		return -1 // numeric before non-numeric
+	case bErr == nil:
+		return 1
+	case a == "default" && b == "default":
+		return 0
+	case a == "default":
+		return 1 // default last
+	case b == "default":
+		return -1
+	default:
+		return strings.Compare(a, b)
+	}
 }
 
 func (e *exampleEngine) selectMediaType(response *openapi3.Response) (string, *openapi3.MediaType, error) {
@@ -265,38 +268,52 @@ func (e *exampleEngine) evaluateHeaders(example *openapi3.Example, eval runtime.
 func (e *exampleEngine) resolveHeaderValue(val any, eval runtime.Evaluator) (string, bool) {
 	switch v := val.(type) {
 	case string:
-		resolved, err := e.evaluateValue(v, eval)
-		if err != nil {
-			if e.verbose {
-				slog.Debug("Failed to evaluate header value", "headerValue", v, "error", err)
-			}
-			return "", false
-		}
-		if str, ok := resolved.(string); ok {
-			return str, true
-		}
-		// Convert to JSON string
-		b, err := json.Marshal(resolved)
-		if err != nil {
-			return "", false
-		}
-		return string(b), true
+		return e.resolveStringHeader(v, eval)
 	case []any:
-		// Multiple header values - join with comma (except for Set-Cookie which should be separate headers)
-		// For simplicity, just take the first value for now
-		if len(v) > 0 {
-			if first, ok := v[0].(string); ok {
-				resolved, err := e.evaluateValue(first, eval)
-				if err == nil {
-					if str, ok := resolved.(string); ok {
-						return str, true
-					}
-				}
-			}
-		}
+		// Multiple header values - join with comma (except for Set-Cookie
+		// which should be separate headers). For simplicity, just take the
+		// first value for now.
+		return e.resolveSliceHeader(v, eval)
 	default:
 		// Try to evaluate as runtime expression
 		resolved, err := e.evaluateValue(val, eval)
+		if err == nil {
+			if str, ok := resolved.(string); ok {
+				return str, true
+			}
+		}
+	}
+	return "", false
+}
+
+// resolveStringHeader evaluates a single header value, marshal-hing non-string
+// results to JSON text.
+func (e *exampleEngine) resolveStringHeader(v string, eval runtime.Evaluator) (string, bool) {
+	resolved, err := e.evaluateValue(v, eval)
+	if err != nil {
+		if e.verbose {
+			slog.Debug("Failed to evaluate header value", "headerValue", v, "error", err)
+		}
+		return "", false
+	}
+	if str, ok := resolved.(string); ok {
+		return str, true
+	}
+	// Convert to JSON string
+	b, err := json.Marshal(resolved)
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
+}
+
+// resolveSliceHeader evaluates the first header value of a multi-value list.
+func (e *exampleEngine) resolveSliceHeader(v []any, eval runtime.Evaluator) (string, bool) {
+	if len(v) == 0 {
+		return "", false
+	}
+	if first, ok := v[0].(string); ok {
+		resolved, err := e.evaluateValue(first, eval)
 		if err == nil {
 			if str, ok := resolved.(string); ok {
 				return str, true

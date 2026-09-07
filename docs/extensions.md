@@ -103,9 +103,9 @@ examples:
 
 Timing values are integer milliseconds: a fractional value (e.g. `x-mock-interval: 2.5`) is rejected at load instead of being silently truncated. Periodically driven examples honor `x-mock-skip` like every other example and are not emitted while it is set.
 
-### Runtime matches and timing (management API)
+### Runtime conditions and timing (management API)
 
-`POST /_mock/examples` mirrors the extensions for AsyncAPI targets with `match`, `interval` and `delay` fields; the same classification and delivery rules apply. See `api/openapi.yaml`.
+`POST /_mock/examples` mirrors the extensions for AsyncAPI targets with `conditions`, `interval` and `delay` fields; the same classification and delivery rules apply. See `api/openapi.yaml`.
 
 > **Not idempotent**: every successful `POST /_mock/examples` registers a distinct example (and, for interval targets, a separate delivery job). Re-sending a request after a lost response creates a second subscription; keep the returned `id` and stop an interval example with `DELETE /_mock/examples/{id}`.
 

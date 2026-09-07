@@ -213,6 +213,7 @@ func (h *signalRHub) serveUpgrade(w http.ResponseWriter, r *http.Request) {
 		Channel:      channel,
 		Query:        sc.query,
 		Headers:      sc.headers,
+		Protocol:     asyncapi.ProtocolSignalR,
 	}
 	if h.hooks.OnConnect != nil {
 		h.hooks.OnConnect(channel, connID, info)

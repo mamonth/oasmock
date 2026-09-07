@@ -87,6 +87,8 @@ func getCachedSchema(schema map[string]any) (*gojsonschema.Schema, error) {
 // An evaluation failure (an expression source unavailable in the context, e.g.
 // {$event.*} on the reply path) fails closed; when verbose is true the failure
 // is logged at warning level (RS.EXT.29), otherwise at debug.
+//
+//nolint:gocyclo // per-condition grammar branches (pre-eval, eval, compare)
 func EvaluateParamsMatch(pm ParamsMatch, eval runtime.Evaluator, verbose ...bool) (bool, error) {
 	keepVerbose := len(verbose) > 0 && verbose[0]
 	for expr, condition := range pm {

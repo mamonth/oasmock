@@ -256,7 +256,7 @@ func TestIntegration_ConnectionTargeting(t *testing.T) {
 	port, stop := startManagementServer(t)
 	defer stop()
 
-	addBody := `{"channel":"/alerts","match":{"{$event.name}":"levelUp","{$connection.id}":"{$event.connectionId}"},"response":{"code":200,"body":{"ring":"{$event.data}"}}}`
+	addBody := `{"channel":"/alerts","conditions":{"{$event.name}":"levelUp","{$connection.id}":"{$event.connectionId}"},"response":{"code":200,"body":{"ring":"{$event.data}"}}}`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/_mock/examples", port), "application/json", strings.NewReader(addBody))
 	require.NoError(t, err)
 	_ = resp.Body.Close()
@@ -469,6 +469,7 @@ Then the filtered subscriber receives schedule/consumer/event/push envelopes but
 
 Related spec scenarios: RS.AMG.23, RS.AMG.24, RS.AMG.25, RS.AMG.26, RS.AMG.27
 */
+//nolint:gocyclo // black-box assertion matrix over four envelope kinds
 func TestIntegration_ManageStream_Envelopes(t *testing.T) {
 	t.Parallel()
 	port, stop := startManagementServer(t)
@@ -590,7 +591,7 @@ func TestIntegration_ReceiveBuiltIn_Runtime(t *testing.T) {
 	port, stop := startManagementServer(t)
 	defer stop()
 
-	addBody := `{"channel":"/alerts","match":{"{$event.name}":"receive"},"response":{"code":200,"body":{"echoed":"{$event.text}"}}}`
+	addBody := `{"channel":"/alerts","conditions":{"{$event.name}":"receive"},"response":{"code":200,"body":{"echoed":"{$event.text}"}}}`
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/_mock/examples", port), "application/json", strings.NewReader(addBody))
 	require.NoError(t, err)
 	_ = resp.Body.Close()

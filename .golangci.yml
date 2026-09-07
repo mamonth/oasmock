@@ -19,11 +19,14 @@ linters:
   settings:
     gocyclo:
       # Project standard: keep every function under this cyclomatic bound.
-      min-complexity: 15
+      # Lowered from 15 to 10 so ceiling-sitting logic is either simplified or
+      # carries an explicit //nolint:gocyclo with a written rationale.
+      min-complexity: 10
     gocognit:
       # Flag only deeply tangled functions (handlers and schema registrars
       # legitimately branch on several states); small helpers are preferred.
-      min-complexity: 35
+      # Lowered from 35 to 25 so deeply nested helpers are reviewed.
+      min-complexity: 25
     dupl:
       threshold: 150
   exclusions:

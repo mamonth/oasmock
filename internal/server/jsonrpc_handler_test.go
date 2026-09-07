@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/golang/mock/gomock"
+	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,6 +36,40 @@ paths:
 `
 	ldr := openapi3.NewLoader()
 	spec, err := ldr.LoadFromData([]byte(yamlSpec))
+	if err != nil {
+		panic(err)
+	}
+	pathMap := spec.Paths.Map()
+	pathItem := pathMap["/test"]
+	op := pathItem.Get
+	if op == nil {
+		panic("GET operation not found")
+	}
+	return op.Responses
+}
+
+func createResponsesWithStatus(status string) *openapi3.Responses {
+	const yamlSpec = `
+openapi: 3.0.3
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /test:
+    get:
+      responses:
+        xxxx:
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    message: "Hello, World!"
+`
+	filled := strings.Replace(yamlSpec, "xxxx", status, 1)
+	ldr := openapi3.NewLoader()
+	spec, err := ldr.LoadFromData([]byte(filled))
 	if err != nil {
 		panic(err)
 	}
@@ -428,14 +464,51 @@ func TestRpcHandler_ResponseHeaders(t *testing.T) {
 }
 
 /*
-Scenario: RpcHandler propagates response status code from example
-Given a handler with a mapping that returns a specific status code
+Scenario: RpcHandler keeps the transport 200 and surfaces a mocked status in X-Mock-Status
+Given a handler with a mapping whose example carries a non-200 status code
 When ServeHTTP is called
-Then the HTTP response uses that status code
+Then the HTTP response is 200 (JSON-RPC over HTTP transport) and the mocked
+status is exposed in the X-Mock-Status header instead of the transport status
 
-Related spec scenarios: RS.JRP.17
+Related spec scenarios: RS.JRP.35
 */
-func TestRpcHandler_ResponseStatusCode(t *testing.T) {
+func TestRpcHandler_MockedStatusInHeader(t *testing.T) {
+	t.Parallel()
+
+	handler, proto, _ := newRpcHandlerWithMocks(t)
+
+	mapping := &RouteMapping{
+		Method:     "POST",
+		Path:       "/rpc/s",
+		Pattern:    "/rpc/s",
+		ChiPattern: "/rpc/s",
+		Responses:  createResponsesWithStatus("502"),
+	}
+	handler.procedureMap["s"] = mapping
+
+	call := RpcCall{Procedure: "s", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "s", "id": float64(1)}, ID: float64(1), HasID: true}
+	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &call}}, nil)
+	proto.EXPECT().ContentType().Return("application/json")
+
+	req := httptest.NewRequest(http.MethodPost, "/rpc", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "JSON-RPC transport must always answer 200 for a single call")
+	assert.Equal(t, "502", resp.Header.Get("X-Mock-Status"), "mocked status must be carried in X-Mock-Status")
+}
+
+/*
+Scenario: RpcHandler omits X-Mock-Status for a default 200 mocked status
+Given a handler with a mapping whose example carries the default 200 status
+When ServeHTTP is called
+Then the transport is 200 and no X-Mock-Status header is set
+
+Related spec scenarios: RS.JRP.36
+*/
+func TestRpcHandler_NoStatusHeaderFor200(t *testing.T) {
 	t.Parallel()
 
 	handler, proto, _ := newRpcHandlerWithMocks(t)
@@ -460,40 +533,75 @@ func TestRpcHandler_ResponseStatusCode(t *testing.T) {
 
 	resp := w.Result()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("X-Mock-Status"), "default 200 mocked status must not set X-Mock-Status")
 }
 
 /*
 Scenario: RpcHandler extracts procedure path params from the request URL
 Given a procedure whose route is /rpc/users/{id} invoked at /rpc/users/123
-When ServeHTTP is called
-Then path param id=123 is captured against the procedure's own ChiPattern
-(even though the gateway route itself has no params)
+When the request is routed through the real router
+Then path param id=123 is captured from chi against the procedure's own
+ChiPattern (the procedure path is mounted so {$request.path.id} resolves)
 
 Related spec scenarios: RS.JRP.34
 */
 func TestRpcHandler_ProcedurePathParams(t *testing.T) {
 	t.Parallel()
 
-	handler, proto, _ := newRpcHandlerWithMocks(t)
+	const spec = `
+openapi: 3.0.3
+info:
+  title: RPC Param API
+  version: 1.0.0
+x-rpc:
+  gateway: /rpc
+  protocolType: json-rpc
+  procedure:
+    call: method
+    match: post.operationId
+paths:
+  /rpc/users/{id}:
+    post:
+      operationId: getUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    jsonrpc: "2.0"
+                    result: "{$request.path.id}"
+                    id: "{$request.body.id}"
+`
+	ldr := openapi3.NewLoader()
+	parsed, err := ldr.LoadFromData([]byte(spec))
+	require.NoError(t, err)
+	require.NoError(t, parsed.Validate(ldr.Context))
 
-	mapping := &RouteMapping{
-		Method:     "POST",
-		Path:       "/rpc/users/{id}",
-		Pattern:    "/rpc/users/{id}",
-		ChiPattern: "/rpc/users/{id}",
-		Responses:  createResponsesWithExample(),
-	}
-	handler.procedureMap["getUser"] = mapping
+	schemas := []loader.SchemaInfo{{Kind: loader.KindOpenAPI, Spec: parsed, Prefix: ""}}
+	srv, err := New(Config{HistorySize: DefaultHistorySize}, schemas)
+	require.NoError(t, err)
+	defer func() { _ = srv.Shutdown(context.Background()) }()
 
-	call := RpcCall{Procedure: "getUser", Raw: map[string]interface{}{"jsonrpc": "2.0", "method": "getUser", "id": float64(1)}, ID: float64(1), HasID: true}
-	proto.EXPECT().ParseBody(gomock.Any()).Return([]RpcEntry{{Call: &call}}, nil)
-	proto.EXPECT().ContentType().Return("application/json")
+	ts := httptest.NewServer(srv.router)
+	defer ts.Close() //nolint:errcheck
 
-	req := httptest.NewRequest(http.MethodPost, "/rpc/users/123", nil)
-	w := httptest.NewRecorder()
+	body := `{"jsonrpc":"2.0","method":"getUser","id":1}`
+	resp, err := http.Post(ts.URL+"/rpc/users/123", "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	handler.ServeHTTP(w, req)
-
-	resp := w.Result()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var result map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.Equal(t, "123", result["result"], "{$request.path.id} must resolve to the chi-captured param")
+	assert.Equal(t, float64(1), result["id"])
 }

@@ -50,7 +50,10 @@ type EventTrigger struct {
 }
 
 // ExtractEventTriggers parses the x-event-trigger list extension (RS.EVT.1-4).
-// It returns false when the extension is absent or not a list.
+// It returns false when the extension is absent or not a list. The parse
+// branches on each trigger item's optional fields.
+//
+//nolint:gocyclo // per-trigger field dispatch
 func ExtractEventTriggers(ex *openapi3.Example) ([]EventTrigger, bool) {
 	if ex == nil || ex.Extensions == nil {
 		return nil, false

@@ -102,9 +102,27 @@ Standard JSON-RPC 2.0 error codes are returned for protocol-level errors:
 | -32601 | Method not found | Procedure name not found in the operation map |
 | -32603 | Internal error | Pipeline execution error |
 
+## HTTP Transport Semantics
+
+JSON-RPC over HTTP answers with transport status `200` for every valid
+single-call or batch response, whether a call yields a JSON-RPC result or a
+JSON-RPC error (the error lives in the JSON body, per the spec). Notifications
+alone answer `204 No Content`.
+
+Because a mocked operation may declare a non-2xx response status, the mocked
+status never becomes the transport status — it is exposed in the
+`X-Mock-Status` response header. For the default `200` example the header is
+omitted.
+
 ## Coexistence with HTTP Routes
 
 A single OpenAPI spec can contain both RPC procedures and normal HTTP routes. Paths under the gateway are served by the RPC handler; all other paths are served by the normal HTTP handler.
+
+Every procedure path is also mounted as its own route, so a procedure may be
+invoked either at the gateway (`POST /rpc` with the `method` field in the body)
+or directly at the procedure's own path. The direct form lets chi capture path
+parameters — for a procedure at `/rpc/users/{id}`, posting to `/rpc/users/123`
+makes `{$request.path.id}` resolve to `123`.
 
 ## CLI Usage
 

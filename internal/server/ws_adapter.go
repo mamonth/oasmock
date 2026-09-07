@@ -235,7 +235,12 @@ func newWSProtocolAdapter() *wsProtocolAdapter {
 // Protocol implements ProtocolAdapter.
 func (a *wsProtocolAdapter) Protocol() string { return asyncapi.ProtocolWS }
 
-// Handler builds the WebSocket upgrade handler for an AsyncAPI ws channel.
+// Handler builds the WebSocket upgrade handler for an AsyncAPI ws channel. It
+// is a lifecycle state machine (upgrade, registry, connect hooks, send/receive
+// handling, reply dispatch, read loop) whose branches are interleaved by
+// protocol.
+//
+//nolint:gocognit,gocyclo // intentional WebSocket lifecycle state machine
 func (a *wsProtocolAdapter) Handler(mapping *RouteMapping, handler MessageHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := wsUpgrader.Upgrade(w, r, nil)
@@ -254,6 +259,7 @@ func (a *wsProtocolAdapter) Handler(mapping *RouteMapping, handler MessageHandle
 			Channel:      channel,
 			Query:        r.URL.Query(),
 			Headers:      lowerHeaderKeys(r.Header),
+			Protocol:     asyncapi.ProtocolWS,
 		}
 		if a.hooks.OnConnect != nil {
 			a.hooks.OnConnect(channel, id, info)

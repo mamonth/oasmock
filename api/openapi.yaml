@@ -265,66 +265,21 @@ components:
         error:
           type: string
           description: Human-readable error message
-    AddExampleRequest:
+    NewExampleRequestBase:
       type: object
+      description: |
+        Abstract request fields shared by every example target kind. Not used
+        directly — compose via NewExampleRequestSync / NewExampleRequestAsync.
+        The shared property bag is left open so target-specific schemas can
+        merge it through allOf and partition targeting with oneOf.
       required:
         - response
-      oneOf:
-        - title: sync (OpenAPI)
-          required:
-            - path
-            - response
-          not:
-            anyOf:
-              - required: [protocol]
-              - required: [channel]
-              - required: [match]
-              - required: [interval]
-              - required: [delay]
-        - title: async (AsyncAPI)
-          required:
-            - channel
-            - response
-          not:
-            anyOf:
-              - required: [path]
       properties:
-        path:
-          type: string
-          description: The request path (including path parameters) to match (OpenAPI target)
-        protocol:
-          type: string
-          enum: [http, ws]
-          description: AsyncAPI protocol when targeting an AsyncAPI channel
-        channel:
-          type: string
-          description: AsyncAPI channel address (prefixed) when targeting an AsyncAPI channel
         method:
           type: string
           enum: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
           default: GET
           description: HTTP method to match
-        match:
-          type: object
-          additionalProperties: true
-          description: |
-            AsyncAPI-only. Mirrors the x-mock-match extension against the event
-            and connection contexts ({$event.*}, {$connection.*}) to drive live
-            event-driven delivery. At least one condition must reference the
-            event context; a connection-only or literal match is rejected.
-        interval:
-          type: integer
-          minimum: 1
-          description: |
-            AsyncAPI-only. Positive millisecond cadence for recurring delivery
-            (mirrors x-mock-interval).
-        delay:
-          type: integer
-          minimum: 0
-          default: 0
-          description: |
-            AsyncAPI-only. Millisecond delay before emission after a fire
-            (mirrors x-mock-delay).
         once:
           type: boolean
           default: false
@@ -348,8 +303,67 @@ components:
           description: |
             Conditions to match the request. Keys can be runtime expressions,
             values can be literal values or JSON schemas for validation.
+            Keys may reference the reply contexts ({$request.*}, {$message.*},
+            {$channel.*}) for OpenAPI/AsyncAPI reply examples, or the event and
+            connection contexts ({$event.*}, {$connection.*}) for async-driven
+            delivery.
         response:
           $ref: '#/components/schemas/ExampleResponse'
+    NewExampleRequestSync:
+      type: object
+      description: |
+        Sync (OpenAPI) target. Requires `path` (plus the shared `response`) and
+        forbids every async-only field (protocol/channel/interval/delay);
+        mixing target kinds is rejected via the not-fence, so an unknown field
+        never silently flips the request onto the async branch.
+      allOf:
+        - $ref: '#/components/schemas/NewExampleRequestBase'
+        - type: object
+          required:
+            - path
+          properties:
+            path:
+              type: string
+              description: The request path (including path parameters) to match (OpenAPI target)
+    NewExampleRequestAsync:
+      type: object
+      description: |
+        Async (AsyncAPI) target. Requires `channel` (plus the shared `response`)
+        and forbids `path`; mixing target kinds is rejected via the not-fence.
+      allOf:
+        - $ref: '#/components/schemas/NewExampleRequestBase'
+        - type: object
+          required:
+            - channel
+          properties:
+            protocol:
+              type: string
+              enum: [http, ws]
+              description: AsyncAPI protocol when targeting an AsyncAPI channel
+            channel:
+              type: string
+              description: AsyncAPI channel address (prefixed) when targeting an AsyncAPI channel
+            interval:
+              type: integer
+              minimum: 1
+              description: |
+                AsyncAPI-only. Positive millisecond cadence for recurring delivery
+                (mirrors x-mock-interval).
+            delay:
+              type: integer
+              minimum: 0
+              default: 0
+              description: |
+                AsyncAPI-only. Millisecond delay before emission after a fire
+                (mirrors x-mock-delay).
+    AddExampleRequest:
+      description: |
+        Target discriminator over the concrete example schemas: the sync
+        (OpenAPI) branch targets a path, the async (AsyncAPI) branch targets a
+        channel. Exactly one branch matches, so mixed targeting is rejected.
+      oneOf:
+        - $ref: '#/components/schemas/NewExampleRequestSync'
+        - $ref: '#/components/schemas/NewExampleRequestAsync'
     ExampleResponse:
       type: object
       required:
@@ -459,69 +473,6 @@ components:
           minimum: 0
           default: 0
           description: Delivery delay in milliseconds
-    ManageEnvelope:
-      type: object
-      required:
-        - type
-      properties:
-        type:
-          type: string
-          enum: [event, push, consumer, schedule]
-          description: Envelope kind
-        ts:
-          type: integer
-          description: Emit timestamp in milliseconds since epoch
-        event:
-          type: object
-          properties:
-            name:
-              type: string
-            schema:
-              type: string
-            global:
-              type: boolean
-            payload:
-              type: object
-              additionalProperties: true
-        push:
-          type: object
-          properties:
-            channel:
-              type: string
-            connectionId:
-              type: string
-            payload:
-              type: object
-              additionalProperties: true
-        consumer:
-          type: object
-          properties:
-            action:
-              type: string
-              enum: [connected, disconnected]
-            connectionId:
-              type: string
-            channel:
-              type: string
-            streams:
-              type: array
-              items:
-                type: object
-                additionalProperties: true
-        schedule:
-          type: object
-          properties:
-            action:
-              type: string
-              enum: [started, stopped]
-              description: started when an interval example registers, stopped when it is removed or cancelled
-            exampleId:
-              type: string
-              description: Client-facing example id (the POST /_mock/examples id for runtime examples, the spec example name otherwise); identical for the started/stopped pair
-            channel:
-              type: string
-            interval:
-              type: integer
     AsyncActionResponse:
       type: object
       properties:
@@ -542,6 +493,9 @@ components:
                 type: string
               channel:
                 type: string
+              protocol:
+                type: string
+                enum: [ws, signalr]
               streams:
                 type: array
                 items:

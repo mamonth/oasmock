@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
+	"github.com/mamonth/oasmock/internal/asyncapi"
 	"github.com/mamonth/oasmock/internal/runtime"
 )
 
@@ -20,7 +21,10 @@ type asyncMessageRequest struct {
 }
 
 // handleAsyncMessage pushes a message to channel consumers (immediate or
-// delayed, targeted or broadcast).
+// delayed, targeted or broadcast). It branches on deliverable class and
+// preconditions before delegating to the push/registry helpers.
+//
+//nolint:gocyclo // targeted/broadcast/delayed precondition branches
 func (s *Server) handleAsyncMessage(w http.ResponseWriter, r *http.Request) {
 	req, err := decodeAsyncMessage(r)
 	if err != nil {
@@ -163,12 +167,16 @@ func matchingHubChannel(hub *signalRHub, address string) string {
 }
 
 // handleAsyncConsumers lists active consumers per channel (RS.AMG.8-9) or
-// across all channels when the channel filter is omitted (RS.AMG.22).
+// across all channels when the channel filter is omitted (RS.AMG.22). It
+// branches on the ws/SignalR registries and the channel scope.
+//
+//nolint:gocyclo // ws registry + SignalR hub union branches
 func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 	channel := r.URL.Query().Get("channel")
 	type consumerInfo struct {
 		ConnectionID string              `json:"connectionId"`
 		Channel      string              `json:"channel"`
+		Protocol     string              `json:"protocol"`
 		Streams      []map[string]string `json:"streams,omitempty"`
 	}
 	consumers := []consumerInfo{}
@@ -181,7 +189,7 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 			conns = reg.connections(channel)
 		}
 		for _, ws := range conns {
-			consumers = append(consumers, consumerInfo{ConnectionID: ws.id, Channel: ws.channel})
+			consumers = append(consumers, consumerInfo{ConnectionID: ws.id, Channel: ws.channel, Protocol: asyncapi.ProtocolWS})
 		}
 	}
 	if channel == "" {
@@ -193,6 +201,7 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 					consumers = append(consumers, consumerInfo{
 						ConnectionID: st["connectionId"],
 						Channel:      address,
+						Protocol:     asyncapi.ProtocolSignalR,
 						Streams:      []map[string]string{st},
 					})
 				}
@@ -204,6 +213,7 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 				consumers = append(consumers, consumerInfo{
 					ConnectionID: st["connectionId"],
 					Channel:      channel,
+					Protocol:     asyncapi.ProtocolSignalR,
 					Streams:      []map[string]string{st},
 				})
 			}

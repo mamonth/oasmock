@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mamonth/oasmock/internal/eventbus"
 	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/mamonth/oasmock/internal/runtime"
@@ -67,7 +68,7 @@ func (d *messageDelivery) shutdown() {
 }
 
 // deliver delivers an event payload to a subscription's consumers (broadcast).
-func (d *messageDelivery) deliver(sub channelSubscription, payload map[string]any) {
+func (d *messageDelivery) deliver(sub eventbus.ChannelSubscription, payload map[string]any) {
 	d.deliverTo(sub, payload, nil)
 }
 
@@ -75,20 +76,20 @@ func (d *messageDelivery) deliver(sub channelSubscription, payload map[string]an
 // The connection bucket (if any) is evaluated against that one recipient only;
 // with no connection conditions the message is pushed to the recipient alone
 // (RS.EVT.24, RS.EXT.26).
-func (d *messageDelivery) deliverTargeted(sub channelSubscription, payload map[string]any, recipient ConsumerInfo) {
+func (d *messageDelivery) deliverTargeted(sub eventbus.ChannelSubscription, payload map[string]any, recipient ConsumerInfo) {
 	d.deliverTo(sub, payload, &recipient)
 }
 
 // deliverTo runs the shared delayed-emission + delivery pipeline for a
 // subscription. When target is non-nil, delivery is restricted to that single
 // candidate (built-in connect recipient).
-func (d *messageDelivery) deliverTo(sub channelSubscription, payload map[string]any, target *ConsumerInfo) {
-	if len(sub.messages) == 0 {
+func (d *messageDelivery) deliverTo(sub eventbus.ChannelSubscription, payload map[string]any, target *ConsumerInfo) {
+	if len(sub.Messages) == 0 {
 		return
 	}
-	if sub.delay > 0 {
-		ms := sub.delay
-		sub.delay = 0
+	if sub.Delay > 0 {
+		ms := sub.Delay
+		sub.Delay = 0
 		go func() {
 			select {
 			case <-d.done:
@@ -99,13 +100,13 @@ func (d *messageDelivery) deliverTo(sub channelSubscription, payload map[string]
 		}()
 		return
 	}
-	deliverable := sub.messages[0]
-	addr := sub.address
-	prefix := deliverable.prefix
-	eventName := sub.event
-	opID := "event:" + cmp.Or(eventName, anyEventIdentity) + ":" + addr
+	deliverable := sub.Messages[0]
+	addr := sub.Address
+	prefix := deliverable.Prefix
+	eventName := sub.Event
+	opID := "event:" + cmp.Or(eventName, eventbus.AnyEventIdentity) + ":" + addr
 
-	d.deliverExample(sub, deliverable.spec.Examples, addr, prefix, eventName, payload, opID, target)
+	d.deliverExample(sub, deliverable.Spec.Examples, addr, prefix, eventName, payload, opID, target)
 }
 
 // stateEnvEvaluator wires the fixed state and environment sources shared by
@@ -162,8 +163,12 @@ func (d *messageDelivery) evaluateConnectionBucket(bucket extensions.ParamsMatch
 
 // deliverExample runs the shared selection + render + recipient-partition
 // pipeline for one subscription's examples. When target is non-nil, delivery
-// is restricted to that single candidate (built-in connect recipient).
-func (d *messageDelivery) deliverExample(sub channelSubscription, examples []*loader.MessageExampleSpec, addr, prefix, eventName string, payload map[string]any, opID string, target *ConsumerInfo) {
+// is restricted to that single candidate (built-in connect recipient). The
+// branches cover per-example match/target/broadcast/per-connection partition
+// paths that are inherent to the two-phase delivery design (design D6).
+//
+//nolint:gocyclo // intentional two-phase recipient-partition pipeline
+func (d *messageDelivery) deliverExample(sub eventbus.ChannelSubscription, examples []*loader.MessageExampleSpec, addr, prefix, eventName string, payload map[string]any, opID string, target *ConsumerInfo) {
 	// Fixed (non-connection) sources evaluated once per emission.
 	state := d.renderer.NewStateSource(prefix)
 	env := d.renderer.NewEnvSource()

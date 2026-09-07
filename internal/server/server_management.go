@@ -57,83 +57,20 @@ func (s *Server) findAsyncRouteMapping(protocol, channel, method string) *RouteM
 	return nil
 }
 
-// addExampleRequestSchema is the oneOf two-branch request schema for
-// POST /_mock/examples (design D2). Branch A is the sync (OpenAPI) target:
-// required path+response and no async-only fields. Branch B is the async
-// (AsyncAPI) target: required channel+response and no path.
-var addExampleRequestSchema = gojsonschema.NewGoLoader(map[string]any{
-	"type":     "object",
-	"required": []string{"response"},
-	"oneOf": []any{
-		map[string]any{
-			"required": []string{"path", "response"},
-			"not": map[string]any{
-				"anyOf": []any{
-					map[string]any{"required": []string{"protocol"}},
-					map[string]any{"required": []string{"channel"}},
-					map[string]any{"required": []string{"match"}},
-					map[string]any{"required": []string{"interval"}},
-					map[string]any{"required": []string{"delay"}},
-				},
-			},
-		},
-		map[string]any{
-			"required": []string{"channel", "response"},
-			"not": map[string]any{
-				"anyOf": []any{
-					map[string]any{"required": []string{"path"}},
-				},
-			},
-		},
-	},
-	"properties": map[string]any{
-		"path": map[string]any{"type": "string"},
-		"protocol": map[string]any{
-			"type": "string",
-			"enum": []string{"http", "ws"},
-		},
-		"channel": map[string]any{"type": "string"},
-		"method": map[string]any{
-			"type":    "string",
-			"enum":    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
-			"default": "GET",
-		},
-		"match": map[string]any{
-			"type":                 "object",
-			"additionalProperties": true,
-		},
-		"interval": map[string]any{"type": "integer", "minimum": 1},
-		"delay":    map[string]any{"type": "integer", "minimum": 0},
-		"once":     map[string]any{"type": "boolean"},
-		"validate": map[string]any{"type": "boolean"},
-		"ttl":      map[string]any{"type": "integer", "minimum": 0},
-		"conditions": map[string]any{
-			"type": "object",
-			"additionalProperties": map[string]any{
-				"oneOf": []any{
-					map[string]any{"type": "string"},
-					map[string]any{"type": "number"},
-					map[string]any{"type": "boolean"},
-					map[string]any{"type": "object"},
-				},
-			},
-		},
-		"response": map[string]any{
-			"type":     "object",
-			"required": []string{"code"},
-			"properties": map[string]any{
-				"code": map[string]any{"type": "integer"},
-				"headers": map[string]any{
-					"type":                 "object",
-					"additionalProperties": map[string]any{"type": "string"},
-				},
-				"body": map[string]any{
-					"type": []any{"string", "number", "boolean", "object", "array"},
-				},
-			},
-		},
-	},
-})
+// addExampleRequestSchema is the runtime request-validation schema for
+// POST /_mock/examples (design D2: oneOf two-branch target discriminator — the
+// sync branch requires path+response and forbids every async-only field, the
+// async branch requires channel+response and forbids path). It is not
+// hand-written: it is regenerated from components.schemas.AddExampleRequest in
+// api/openapi.yaml (see add_example_request_schema_gen.go), keeping the OpenAPI
+// document the single source of truth for the management contract.
+var addExampleRequestSchema = func() gojsonschema.JSONLoader {
+	loader := gojsonschema.NewBytesLoader(AddExampleRequestSchemaJSON)
+	if _, err := gojsonschema.NewSchemaLoader().Compile(loader); err != nil {
+		panic("generated AddExampleRequest schema failed to compile: " + err.Error())
+	}
+	return loader
+}()
 
 func validateAddExampleRequest(rawJSON []byte) error {
 	loader := gojsonschema.NewBytesLoader(rawJSON)
@@ -165,7 +102,6 @@ type addExampleRequest struct {
 	Method     string         `json:"method"`
 	Protocol   string         `json:"protocol"`
 	Channel    string         `json:"channel"`
-	Match      map[string]any `json:"match"`
 	Interval   int            `json:"interval"`
 	Delay      int            `json:"delay"`
 	Once       bool           `json:"once"`
@@ -242,6 +178,31 @@ func responseSchemaFor(responses *openapi3.Responses, code int) *openapi3.Schema
 	return nil
 }
 
+// rejectRemovedMatchField rejects a stale top-level `match` field (RS.MAPI.37):
+// the async-only selector was removed in favor of the unified `conditions`, so
+// a body still carrying it must never be silently registered without its
+// selection conditions.
+func rejectRemovedMatchField(bodyBytes []byte) error {
+	var raw map[string]any
+	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
+		return fmt.Errorf("invalid JSON")
+	}
+	if _, ok := raw["match"]; ok {
+		return fmt.Errorf("'match' is removed; use 'conditions'")
+	}
+	return nil
+}
+
+// rejectSyncTimingFields rejects the async-only timing fields on an OpenAPI
+// (sync) target (RS.MAPI.28): interval/delay are only meaningful for AsyncAPI
+// routes.
+func rejectSyncTimingFields(req *addExampleRequest) error {
+	if req.Interval > 0 || req.Delay > 0 {
+		return fmt.Errorf("'interval' and 'delay' are only valid on an AsyncAPI target")
+	}
+	return nil
+}
+
 // decodeAddExampleRequest reads, schema-validates and decodes an add-example
 // body, applying the field checks that are independent of the resolved target.
 func decodeAddExampleRequest(r *http.Request) (*addExampleRequest, error) {
@@ -250,6 +211,9 @@ func decodeAddExampleRequest(r *http.Request) (*addExampleRequest, error) {
 		return nil, fmt.Errorf("failed to read request body: %w", err)
 	}
 	if err := validateAddExampleRequest(bodyBytes); err != nil {
+		return nil, err
+	}
+	if err := rejectRemovedMatchField(bodyBytes); err != nil {
 		return nil, err
 	}
 	var req addExampleRequest
@@ -263,17 +227,27 @@ func decodeAddExampleRequest(r *http.Request) (*addExampleRequest, error) {
 
 	// Single-trigger rule (RS.MAPI.29): an async target has exactly one
 	// trigger — interval OR an {$event.*}-based match, never both.
-	if matchesEventContext(req.Match) && req.Interval > 0 {
-		return nil, fmt.Errorf("'interval' and an event-based 'match' are mutually exclusive")
+	if matchesEventContext(req.Conditions) && req.Interval > 0 {
+		return nil, fmt.Errorf("'interval' and an event-based 'conditions' are mutually exclusive")
 	}
 	return &req, nil
+}
+
+// rejectNonEventAsyncConditions rejects an async target whose conditions
+// reference only {$connection.*} or literal values (no {$event.*}): a runtime
+// example needs a trigger, and a connection-only match has none (RS.MAPI.35).
+func rejectNonEventAsyncConditions(mapping *RouteMapping, req *addExampleRequest) error {
+	if mapping.Protocol != "" && len(req.Conditions) > 0 && !matchesEventContext(req.Conditions) {
+		return fmt.Errorf("async target 'conditions' must reference the event context ({$event.*}); use 'interval' for periodic emission")
+	}
+	return nil
 }
 
 // resolveExampleTarget maps an add-example request to its route: AsyncAPI
 // targets resolve by protocol/channel, OpenAPI targets by path/method. A
 // runtime match on an async target must drive emission, so only an
-// {$event.*}-based match is accepted; a connection-only or literal match has
-// no trigger and is rejected rather than silently registered nowhere
+// {$event.*}-based conditions is accepted; a connection-only or literal match
+// has no trigger and is rejected rather than silently registered nowhere
 // (RS.MAPI.24-26, RS.MAPI.33).
 func (s *Server) resolveExampleTarget(req *addExampleRequest) (*RouteMapping, error) {
 	if req.Protocol != "" || req.Channel != "" {
@@ -281,13 +255,16 @@ func (s *Server) resolveExampleTarget(req *addExampleRequest) (*RouteMapping, er
 		if mapping == nil {
 			return nil, fmt.Errorf("no matching route found")
 		}
-		if mapping.Protocol != "" && req.Match != nil && !matchesEventContext(req.Match) {
-			return nil, fmt.Errorf("async target 'match' must reference the event context ({$event.*}); use 'interval' for periodic emission")
+		if err := rejectNonEventAsyncConditions(mapping, req); err != nil {
+			return nil, err
 		}
 		return mapping, nil
 	}
 	for i := range s.mappings {
 		if m := &s.mappings[i]; m.Pattern == req.Path && m.Method == req.Method {
+			if err := rejectSyncTimingFields(req); err != nil {
+				return nil, err
+			}
 			return m, nil
 		}
 	}
@@ -295,9 +272,9 @@ func (s *Server) resolveExampleTarget(req *addExampleRequest) (*RouteMapping, er
 }
 
 // needsRuntimeRegistration reports whether an async target carries a trigger
-// (match or interval) that registers through the event broker / scheduler.
+// (conditions or interval) that registers through the event broker / scheduler.
 func needsRuntimeRegistration(mapping *RouteMapping, req *addExampleRequest) bool {
-	return mapping.Protocol != "" && (req.Match != nil || req.Interval > 0)
+	return mapping.Protocol != "" && (len(req.Conditions) > 0 || req.Interval > 0)
 }
 
 // registerAsyncRuntimeExample registers an event-driven or periodically driven
@@ -310,8 +287,8 @@ func (s *Server) registerAsyncRuntimeExample(w http.ResponseWriter, req *addExam
 		headers[k] = v
 	}
 	ext := make(map[string]any)
-	if req.Match != nil {
-		ext["x-mock-match"] = req.Match
+	if len(req.Conditions) > 0 {
+		ext["x-mock-match"] = req.Conditions
 	}
 	if req.Interval > 0 {
 		ext["x-mock-interval"] = req.Interval

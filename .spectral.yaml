@@ -1,0 +1,7 @@
+# Spectral ruleset for the management API contracts.
+# Both specifications are linted together: the OpenAPI REST surface
+# (api/openapi.yaml) and the AsyncAPI stream surface (api/asyncapi.yaml).
+# Spectral applies each preset only to documents of the matching format.
+extends:
+  - spectral:oas
+  - spectral:asyncapi

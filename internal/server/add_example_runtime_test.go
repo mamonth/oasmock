@@ -30,7 +30,7 @@ func TestAddExample_RuntimeEventMatch(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 
-	body := `{"channel":"/alerts","match":{"{$event.name}":"levelUp"},"response":{"code":200,"body":{"msg":"{$event.msg}"}}}`
+	body := `{"channel":"/alerts","conditions":{"{$event.name}":"levelUp"},"response":{"code":200,"body":{"msg":"{$event.msg}"}}}`
 	resp := postExample(t, ts.URL, body)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var addResp map[string]any
@@ -135,7 +135,7 @@ func TestAddExample_RuntimeConnectMatch(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 
-	body := `{"channel":"/alerts","match":{"{$event.name}":"connect"},"response":{"code":200,"body":{"msg":"welcome"}}}`
+	body := `{"channel":"/alerts","conditions":{"{$event.name}":"connect"},"response":{"code":200,"body":{"msg":"welcome"}}}`
 	resp := postExample(t, ts.URL, body)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	resp.Body.Close() //nolint:errcheck
@@ -177,7 +177,7 @@ func TestAddExample_IdsAreNamespaced(t *testing.T) {
 	asyncTS := httptest.NewServer(asyncSrv.router)
 	defer asyncTS.Close() //nolint:errcheck
 
-	body := `{"channel":"/alerts","match":{"{$event.name}":"levelUp"},"response":{"code":200,"body":{"a":1}}}`
+	body := `{"channel":"/alerts","conditions":{"{$event.name}":"levelUp"},"response":{"code":200,"body":{"a":1}}}`
 	asyncResp := postExample(t, asyncTS.URL, body)
 	require.Equal(t, http.StatusOK, asyncResp.StatusCode)
 	var asyncPayload map[string]any
