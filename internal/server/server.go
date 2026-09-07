@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -55,9 +56,20 @@ type Server struct {
 	protocolAdapters map[string]ProtocolAdapter
 	routerSetupErr   error
 	hubMgr           *hubManager
-	eventBus         *eventBus
+	eventDriver      asyncDriver
 	manageStream     *manageStream
 	runtimeExamples  *runtimeExampleRegistry
+	channelPrefix    map[string]string
+	nextRequestID    atomic.Uint64
+}
+
+// normalizeConfig applies defaults to a server configuration. It is the single
+// place config defaulting lives so New and NewWithDependencies cannot drift.
+func normalizeConfig(cfg Config) Config {
+	if cfg.HistorySize <= 0 {
+		cfg.HistorySize = DefaultHistorySize
+	}
+	return cfg
 }
 
 // New creates a new mock server with the given configuration and loaded schemas.
@@ -90,12 +102,8 @@ func New(config Config, schemas []loader.SchemaInfo) (*Server, error) {
 	// Create default dependencies using wrappers
 	routeProvider := &loaderRouteProvider{}
 	stateStore := newStateManagerStore(state.NewManager())
-	historySize := config.HistorySize
-	if historySize <= 0 {
-		historySize = DefaultHistorySize
-	}
-	config.HistorySize = historySize
-	historyStore := newHistoryRingBufferStore(history.NewRingBuffer(historySize))
+	config = normalizeConfig(config)
+	historyStore := newHistoryRingBufferStore(history.NewRingBuffer(config.HistorySize))
 
 	deps := Dependencies{
 		RouteProvider: routeProvider,
@@ -108,6 +116,14 @@ func New(config Config, schemas []loader.SchemaInfo) (*Server, error) {
 
 // NewWithDependencies creates a new mock server with explicit dependencies.
 func NewWithDependencies(config Config, schemas []SchemaInfo, deps Dependencies, rpcConfig *loader.RpcConfig, rpcMappings []*loader.RpcRouteMapping) (*Server, error) {
+	return newServerWithDriver(config, schemas, deps, nil, rpcConfig, rpcMappings)
+}
+
+// newServerWithDriver builds a server, optionally with an injected async
+// driver. It is the single construction path: exported constructors use the
+// real event bus (nil driver), while in-package tests can inject a fake to
+// exercise the server's async-driving call sites without a live broker.
+func newServerWithDriver(config Config, schemas []SchemaInfo, deps Dependencies, driver asyncDriver, rpcConfig *loader.RpcConfig, rpcMappings []*loader.RpcRouteMapping) (*Server, error) {
 	// Build route mappings
 	mappings, err := deps.RouteProvider.BuildRouteMappings(schemas)
 	if err != nil {
@@ -115,9 +131,7 @@ func NewWithDependencies(config Config, schemas []SchemaInfo, deps Dependencies,
 	}
 
 	// Ensure history size has a sensible default
-	if config.HistorySize <= 0 {
-		config.HistorySize = DefaultHistorySize
-	}
+	config = normalizeConfig(config)
 
 	registry := newExampleRegistry(config.Verbose)
 	s := &Server{
@@ -135,14 +149,20 @@ func NewWithDependencies(config Config, schemas []SchemaInfo, deps Dependencies,
 	s.hubMgr = newHubManager(s.engine, s.protocolAdapters[asyncapi.ProtocolWS].(*wsProtocolAdapter), schemas)
 	s.manageStream = newManageStream(config.Verbose)
 	s.runtimeExamples = newRuntimeExampleRegistry()
-	s.eventBus = newEventBus(s.engine, s.hubMgr, config.Verbose)
-	s.eventBus.setObserver(func(env manageEnvelope) {
-		if s.manageStream != nil {
+	s.channelPrefix = buildChannelPrefix(mappings, s.hubMgr)
+	if driver == nil {
+		// The observer is installed at construction so the bus is never
+		// partially wired: manageStream exists before the bus is built and the
+		// observer may fire (schedule envelopes) during registerEventSubscriptions.
+		bus := newEventBusWithObserver(s.engine, s.hubMgr, config.Verbose, func(env manageEnvelope) {
 			s.manageStream.broadcast(env)
+		})
+		s.eventDriver = bus
+		if err := bus.registerEventSubscriptions(schemas); err != nil {
+			return nil, err
 		}
-	})
-	if err := s.eventBus.registerEventSubscriptions(schemas); err != nil {
-		return nil, err
+	} else {
+		s.eventDriver = driver
 	}
 	s.wireBuiltInHooks()
 
@@ -232,8 +252,8 @@ func (s *Server) BoundPort() int {
 // calls are no-ops that return the result of the first shutdown.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.registry.stopSweep()
-	if s.eventBus != nil {
-		s.eventBus.shutdown()
+	if s.eventDriver != nil {
+		s.eventDriver.shutdown()
 	}
 	s.httpMu.Lock()
 	hs := s.httpServer

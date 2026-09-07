@@ -3,6 +3,7 @@ package server
 //go:generate mockgen -destination=interfaces_mock_test.go -package=server . RouteProvider,StateStore,HistoryStore,RpcProtocol
 
 import (
+	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/history"
 	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/mamonth/oasmock/internal/runtime"
@@ -157,4 +158,19 @@ type ConsumerBus interface {
 	// PushTo delivers a payload to one candidate consumer (its open streams,
 	// falling back to a server invocation on the same connection).
 	PushTo(consumer ConsumerInfo, address string, payload []byte)
+}
+
+// asyncDriver is the event/interval-driven delivery surface the HTTP pipeline
+// consumes. It is implemented by eventBus so the server and its tests can
+// depend on a narrow contract instead of the concrete bus.
+type asyncDriver interface {
+	fire(name string, payload map[string]any, schema string, global bool, delay *delaySchedule)
+	fireTargeted(name string, payload map[string]any, schema string, recipient ConsumerInfo)
+	hasSubscribers(name, schema string) bool
+	doneChannel() <-chan struct{}
+	registerEventSubscriptions(schemas []SchemaInfo) error
+	shutdown()
+	registerRuntimeExample(id, address, prefix string, spec *loader.MessageExampleSpec) (extensions.TriggerKind, string, error)
+	removeIntervalJob(jobID string)
+	removeEventSubscription(prefix, id string)
 }

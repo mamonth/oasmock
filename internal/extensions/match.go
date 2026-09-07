@@ -18,9 +18,46 @@ import (
 // ParamsMatch represents a parsed x-mock-params-match extension.
 type ParamsMatch map[string]any
 
-var (
-	schemaCache sync.Map // key: schema hash -> *gojsonschema.Schema
-)
+// schemaCacheCapacity bounds the compiled-schema cache so a long-running mock
+// server fed many distinct dynamic examples (POST /_mock/examples) cannot grow
+// it without limit. On overflow the least-recently-inserted entry is evicted.
+const schemaCacheCapacity = 1024
+
+// schemaCache is a fixed-capacity, thread-safe cache of compiled JSON schemas
+// keyed by content hash. It bounds memory while keeping the hot re-match path
+// (same schema across many requests) fast.
+var schemaCache = &schemaCacheStore{
+	store: make(map[string]*gojsonschema.Schema),
+}
+
+type schemaCacheStore struct {
+	mu    sync.Mutex
+	store map[string]*gojsonschema.Schema
+	order []string
+}
+
+// get returns a cached schema by key, or nil when absent.
+func (c *schemaCacheStore) get(key string) *gojsonschema.Schema {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.store[key]
+}
+
+// put stores a schema by key, evicting the oldest when at capacity.
+func (c *schemaCacheStore) put(key string, schema *gojsonschema.Schema) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.store[key]; ok {
+		return
+	}
+	c.store[key] = schema
+	c.order = append(c.order, key)
+	if len(c.order) > schemaCacheCapacity {
+		evicted := c.order[0]
+		c.order = c.order[1:]
+		delete(c.store, evicted)
+	}
+}
 
 // getCachedSchema returns a cached compiled schema or compiles and caches it.
 func getCachedSchema(schema map[string]any) (*gojsonschema.Schema, error) {
@@ -33,8 +70,8 @@ func getCachedSchema(schema map[string]any) (*gojsonschema.Schema, error) {
 	key := hex.EncodeToString(hash[:])
 
 	// Check cache
-	if cached, ok := schemaCache.Load(key); ok {
-		return cached.(*gojsonschema.Schema), nil
+	if cached := schemaCache.get(key); cached != nil {
+		return cached, nil
 	}
 
 	// Compile and cache
@@ -42,7 +79,7 @@ func getCachedSchema(schema map[string]any) (*gojsonschema.Schema, error) {
 	if err != nil {
 		return nil, err
 	}
-	schemaCache.Store(key, compiled)
+	schemaCache.put(key, compiled)
 	return compiled, nil
 }
 

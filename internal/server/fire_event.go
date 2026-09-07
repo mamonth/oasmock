@@ -29,7 +29,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 // dispatchFireEvent validates and executes a fired event.
 func (s *Server) dispatchFireEvent(w http.ResponseWriter, req fireEventRequest) {
-	if s.eventBus == nil {
+	if s.eventDriver == nil {
 		writeJSONError(w, http.StatusInternalServerError, "event broker not initialized")
 		return
 	}
@@ -65,7 +65,7 @@ func (s *Server) dispatchFireEvent(w http.ResponseWriter, req fireEventRequest) 
 	// management endpoint has no schema context of its own, so schema-local
 	// fires only reach empty-prefix subscriptions (use global: true for
 	// prefixed channels).
-	s.eventBus.fire(req.Name, req.Payload, "", req.Global, triggerDelay(req.Delay))
+	s.eventDriver.fire(req.Name, req.Payload, "", req.Global, triggerDelay(req.Delay))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"name":    req.Name,

@@ -159,7 +159,7 @@ func (s *Server) handleMockRequestWithMapping(w http.ResponseWriter, r *http.Req
 	}
 	pathParams := s.extractPathParams(r, mapping)
 
-	body, headers, statusCodeStr, mediaType, err := s.selectAndGenerateResponse(r, mapping, pathParams, nil)
+	res, err := s.selectAndGenerateResponse(r, mapping, pathParams, nil)
 	if err != nil {
 		if err == errNoResponse {
 			writeJSONError(w, http.StatusInternalServerError, "No response defined for operation")
@@ -173,12 +173,12 @@ func (s *Server) handleMockRequestWithMapping(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	for k, v := range headers {
+	for k, v := range res.headers {
 		w.Header().Set(k, v)
 	}
-	w.Header().Set("Content-Type", mediaType)
-	w.WriteHeader(parseStatusCode(statusCodeStr))
-	if _, writeErr := w.Write(body); writeErr != nil && s.config.Verbose {
+	w.Header().Set("Content-Type", res.mediaType)
+	w.WriteHeader(res.statusCode)
+	if _, writeErr := w.Write(res.body); writeErr != nil && s.config.Verbose {
 		slog.Debug("Failed to write response body", "err", writeErr)
 	}
 }
@@ -188,7 +188,16 @@ var (
 	errNotImplemented = fmt.Errorf("not implemented")
 )
 
-func (s *Server) selectAndGenerateResponse(r *http.Request, mapping *RouteMapping, pathParams map[string]string, callBody any) (body []byte, headers map[string]string, statusCode string, mediaType string, err error) {
+// responseResult is the outcome of the shared mock-response pipeline: the
+// body, headers and media type to write, plus the already-parsed status code.
+type responseResult struct {
+	body       []byte
+	headers    map[string]string
+	statusCode int
+	mediaType  string
+}
+
+func (s *Server) selectAndGenerateResponse(r *http.Request, mapping *RouteMapping, pathParams map[string]string, callBody any) (responseResult, error) {
 	evaluator := runtime.NewEvaluator()
 	evaluator.AddSource(runtime.SourceRequest, buildRequestSource(r, pathParams, callBody))
 	evaluator.AddSource(runtime.SourceState, s.newStateSource(mapping.Prefix))
@@ -196,16 +205,16 @@ func (s *Server) selectAndGenerateResponse(r *http.Request, mapping *RouteMappin
 
 	statusCode, response := s.selectResponse(mapping, evaluator)
 	if response == nil {
-		return nil, nil, "", "", errNoResponse
+		return responseResult{}, errNoResponse
 	}
 
 	var mediaTypeObj *openapi3.MediaType
-	mediaType = "application/json"
+	mediaType := "application/json"
 	if len(response.Content) > 0 {
 		var mtErr error
 		mediaType, mediaTypeObj, mtErr = s.selectMediaType(response)
 		if mtErr != nil {
-			return nil, nil, "", "", mtErr
+			return responseResult{}, mtErr
 		}
 	}
 
@@ -216,11 +225,11 @@ func (s *Server) selectAndGenerateResponse(r *http.Request, mapping *RouteMappin
 	dynExample, _ = s.selectDynamicExample(mapping, evaluator)
 	if dynExample == nil {
 		if mediaTypeObj == nil {
-			return nil, nil, "", "", errNotImplemented
+			return responseResult{}, errNotImplemented
 		}
 		example, _ = s.selectExample(mediaTypeObj, evaluator, opID)
 		if example == nil {
-			return nil, nil, "", "", errNotImplemented
+			return responseResult{}, errNotImplemented
 		}
 	}
 
@@ -230,7 +239,7 @@ func (s *Server) selectAndGenerateResponse(r *http.Request, mapping *RouteMappin
 
 	body, headers, statusCode, genErr := s.generateResponse(example, dynExample, evaluator, statusCode)
 	if genErr != nil {
-		return nil, nil, "", "", genErr
+		return responseResult{}, genErr
 	}
 
 	// Fire x-event-trigger events after the response is produced (RS.EVT.1-4).
@@ -238,13 +247,18 @@ func (s *Server) selectAndGenerateResponse(r *http.Request, mapping *RouteMappin
 		s.fireExampleTriggers(example, mapping.Prefix)
 	}
 
-	return body, headers, statusCode, mediaType, nil
+	return responseResult{
+		body:       body,
+		headers:    headers,
+		statusCode: parseStatusCode(statusCode),
+		mediaType:  mediaType,
+	}, nil
 }
 
 // fireExampleTriggers dispatches the x-event-trigger events declared on an
 // OpenAPI response example against the schema's event broker.
 func (s *Server) fireExampleTriggers(example *openapi3.Example, prefix string) {
-	if s.eventBus == nil || example == nil {
+	if s.eventDriver == nil || example == nil {
 		return
 	}
 	triggers, ok := extensions.ExtractEventTriggers(example)
@@ -253,7 +267,7 @@ func (s *Server) fireExampleTriggers(example *openapi3.Example, prefix string) {
 	}
 	for _, trigger := range triggers {
 		delay := triggerDelay(trigger.Delay)
-		s.eventBus.fire(trigger.Name, trigger.Payload, prefix, trigger.Global, delay)
+		s.eventDriver.fire(trigger.Name, trigger.Payload, prefix, trigger.Global, delay)
 	}
 }
 
@@ -304,7 +318,7 @@ func (s *Server) requestHistoryMiddleware(next http.Handler) http.Handler {
 
 		// Build request record
 		record := RequestRecord{
-			ID:        fmt.Sprintf("%d", start.UnixNano()),
+			ID:        strconv.FormatUint(s.nextRequestID.Add(1), 10),
 			Timestamp: start,
 			Method:    r.Method,
 			Path:      r.URL.Path,

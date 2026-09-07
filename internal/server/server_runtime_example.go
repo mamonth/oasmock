@@ -53,7 +53,7 @@ func (s *Server) registerRuntimeExample(id string, mapping *RouteMapping, spec *
 	address := mapping.Path
 	prefix := mapping.Prefix
 
-	trigger, jobID, err := s.eventBus.registerRuntimeExample(id, address, prefix, spec)
+	trigger, jobID, err := s.eventDriver.registerRuntimeExample(id, address, prefix, spec)
 	if err != nil {
 		return 0, "", err
 	}
@@ -73,12 +73,12 @@ func (s *Server) deleteExample(id string) bool {
 	if info, ok := s.runtimeExamples.remove(id); ok {
 		switch info.trigger {
 		case extensions.TriggerPeriodic:
-			if s.eventBus != nil {
-				s.eventBus.removeIntervalJob(info.jobID)
+			if s.eventDriver != nil {
+				s.eventDriver.removeIntervalJob(info.jobID)
 			}
 		case extensions.TriggerEvent:
-			if s.eventBus != nil {
-				s.eventBus.removeEventSubscription(info.prefix, id)
+			if s.eventDriver != nil {
+				s.eventDriver.removeEventSubscription(info.prefix, id)
 			}
 		}
 		return true

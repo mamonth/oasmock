@@ -58,7 +58,7 @@ func (s *Server) handleAsyncMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Delay > 0 {
-		done := s.eventBus.doneChannel()
+		done := s.eventDriver.doneChannel()
 		go func() {
 			select {
 			case <-done:
@@ -86,19 +86,33 @@ func (s *Server) evaluatePushPayload(payload map[string]any, channel string) (an
 
 // prefixForChannel finds the schema prefix owning a channel address.
 func (s *Server) prefixForChannel(channel string) string {
-	for _, m := range s.mappings {
-		if m.Protocol != "" && m.Path == channel {
-			return m.Prefix
+	return s.channelPrefix[channel]
+}
+
+// buildChannelPrefix indexes schema prefixes by channel address so push and
+// built-in trigger firings resolve the owning schema in O(1). It covers the
+// same source sets prefixForChannel previously scanned linearly: every route
+// mapping with a protocol, plus every hub channel.
+func buildChannelPrefix(mappings []RouteMapping, hubs *hubManager) map[string]string {
+	index := make(map[string]string)
+	for _, m := range mappings {
+		if m.Protocol != "" && m.Path != "" {
+			index[m.Path] = m.Prefix
 		}
 	}
-	for _, hub := range s.hubMgr.hubs {
+	if hubs == nil {
+		return index
+	}
+	for _, hub := range hubs.hubs {
 		for _, ch := range hub.channels {
-			if asyncAddressWithPrefix(hub.prefix, ch.Address) == channel {
-				return hub.prefix
+			if addr := asyncAddressWithPrefix(hub.prefix, ch.Address); addr != "" {
+				if _, ok := index[addr]; !ok {
+					index[addr] = hub.prefix
+				}
 			}
 		}
 	}
-	return ""
+	return index
 }
 
 // decodeAsyncMessage parses and validates a message request body.
@@ -112,13 +126,8 @@ func decodeAsyncMessage(r *http.Request) (asyncMessageRequest, error) {
 
 // hasConnection reports whether a ws connection id is active (registry or hub).
 func (s *Server) hasConnection(id string) bool {
-	if reg := s.wsRegistry(); reg != nil {
-		reg.mu.RLock()
-		_, ok := reg.byID[id]
-		reg.mu.RUnlock()
-		if ok {
-			return true
-		}
+	if reg := s.wsRegistry(); reg != nil && reg.Has(id) {
+		return true
 	}
 	return s.hubMgr.hasConnection(id)
 }
@@ -253,10 +262,7 @@ func (s *Server) handleAsyncDisconnect(w http.ResponseWriter, r *http.Request) {
 
 	// Raw ws connection.
 	if reg := s.wsRegistry(); reg != nil {
-		reg.mu.RLock()
-		ws, ok := reg.byID[req.ConnectionID]
-		reg.mu.RUnlock()
-		if ok {
+		if ws, ok := reg.connection(req.ConnectionID); ok {
 			s.disconnectWS(ws.writer, req)
 			reg.unregister(req.ConnectionID)
 		}
