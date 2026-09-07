@@ -90,7 +90,7 @@ func TestLegacyRouteTeardown_EventsFireAlias404(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 
-	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn"}}`
+	body := `{"name":"levelUp","payload":{"level":"warn"}}`
 	resp, err := http.Post(ts.URL+"/_mock/events/fire", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck

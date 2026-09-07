@@ -79,7 +79,7 @@ func TestManageStream_ReceivesEventEnvelope(t *testing.T) {
 	defer conn.Close() //nolint:errcheck
 
 	resp, err := http.Post(ts.URL+"/_mock/events", "application/json",
-		strings.NewReader(`{"type":"fire","event":"levelUp","payload":{"level":"warn"}}`))
+		strings.NewReader(`{"name":"levelUp","payload":{"level":"warn"}}`))
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)

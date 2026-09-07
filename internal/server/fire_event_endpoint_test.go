@@ -65,7 +65,7 @@ func TestFireEventEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close() //nolint:errcheck
 
-	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn","message":"high load"}}`
+	body := `{"name":"levelUp","payload":{"level":"warn","message":"high load"}}`
 	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
@@ -99,7 +99,7 @@ func TestFireEventEndpoint_Delayed(t *testing.T) {
 
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
-	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn"},"delay":10}`
+	body := `{"name":"levelUp","payload":{"level":"warn","message":"high load"}}`
 	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
@@ -107,14 +107,14 @@ func TestFireEventEndpoint_Delayed(t *testing.T) {
 }
 
 /*
-Scenario: Fire-event endpoint rejects a negative delay
-Given a management request firing an event with a negative delay
+Scenario: Fire-event endpoint rejects a body missing the name identity
+Given a management request firing an event with the legacy "event"/"type" fields
 When the fire-event endpoint is invoked
 Then the server responds with HTTP 400
 
-Related spec scenarios: RS.AMG.3
+Related spec scenarios: RS.MAPI.22, RS.MAPI.32
 */
-func TestFireEventEndpoint_NegativeDelay(t *testing.T) {
+func TestFireEventEndpoint_MissingName(t *testing.T) {
 	t.Parallel()
 
 	doc, err := asyncapi.Parse([]byte(fireEventWsDoc))
@@ -125,7 +125,7 @@ func TestFireEventEndpoint_NegativeDelay(t *testing.T) {
 
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
-	body := `{"type":"fire","event":"levelUp","payload":{},"delay":-5}`
+	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn"}}`
 	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
@@ -151,7 +151,7 @@ func TestFireEventEndpoint_NoConsumers(t *testing.T) {
 
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
-	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn","message":"high load"}}`
+	body := `{"name":"levelUp","payload":{"level":"warn","message":"high load"}}`
 	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck

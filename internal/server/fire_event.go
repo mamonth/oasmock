@@ -7,18 +7,17 @@ import (
 )
 
 // fireEventRequest is the payload of POST /_mock/events (RS.MAPI.22-23,
-// RS.MAPI.32). Type discriminates the action; V1 supports "fire" only.
+// RS.MAPI.32).
 type fireEventRequest struct {
-	Type    string         `json:"type"`
-	Event   string         `json:"event"`
+	Name    string         `json:"name"`
 	Payload map[string]any `json:"payload"`
 	Delay   int            `json:"delay"`
 	Global  bool           `json:"global"`
 }
 
-// handleEvents dispatches a discriminated event action through the event
-// broker. The type discriminator is required and only "fire" is accepted
-// (RS.MAPI.32); fire reuses the existing ad-hoc fire semantics.
+// handleEvents fires a named event through the event broker. A POST to the
+// /events collection is the fire action itself (no type discriminator needed);
+// the fired event identity is the required `name` (RS.MAPI.32).
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	var req fireEventRequest
 	if err := decodeJSONBody(r, &req); err != nil {
@@ -34,16 +33,8 @@ func (s *Server) dispatchFireEvent(w http.ResponseWriter, req fireEventRequest) 
 		writeJSONError(w, http.StatusInternalServerError, "event broker not initialized")
 		return
 	}
-	if req.Type == "" {
-		writeJSONError(w, http.StatusBadRequest, "missing required field 'type'")
-		return
-	}
-	if req.Type != "fire" {
-		writeJSONErrorf(w, http.StatusBadRequest, "unsupported event type %q (supported: fire)", req.Type)
-		return
-	}
-	if req.Event == "" {
-		writeJSONError(w, http.StatusBadRequest, "missing required field 'event'")
+	if req.Name == "" {
+		writeJSONError(w, http.StatusBadRequest, "missing required field 'name'")
 		return
 	}
 	if req.Delay < 0 {
@@ -74,9 +65,9 @@ func (s *Server) dispatchFireEvent(w http.ResponseWriter, req fireEventRequest) 
 	// management endpoint has no schema context of its own, so schema-local
 	// fires only reach empty-prefix subscriptions (use global: true for
 	// prefixed channels).
-	s.eventBus.fire(req.Event, req.Payload, "", req.Global, triggerDelay(req.Delay))
+	s.eventBus.fire(req.Name, req.Payload, "", req.Global, triggerDelay(req.Delay))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
-		"event":   req.Event,
+		"name":    req.Name,
 	})
 }

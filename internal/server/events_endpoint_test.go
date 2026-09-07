@@ -16,14 +16,14 @@ import (
 )
 
 /*
-Scenario: Events endpoint requires the type discriminator
-Given a management request to /_mock/events without a type field
+Scenario: Events endpoint requires the name identity
+Given a management request to /_mock/events without a name field
 When the events endpoint is invoked
 Then the server responds with HTTP 400
 
 Related spec scenarios: RS.MAPI.32, RS.MAPI.22
 */
-func TestEventsEndpoint_MissingType(t *testing.T) {
+func TestEventsEndpoint_MissingName(t *testing.T) {
 	t.Parallel()
 
 	doc, err := asyncapi.Parse([]byte(fireEventWsDoc))
@@ -42,40 +42,14 @@ func TestEventsEndpoint_MissingType(t *testing.T) {
 }
 
 /*
-Scenario: Events endpoint rejects an unknown type
-Given a management request to /_mock/events with an unsupported type
-When the events endpoint is invoked
-Then the server responds with HTTP 400
-
-Related spec scenarios: RS.MAPI.32, RS.MAPI.22
-*/
-func TestEventsEndpoint_UnknownType(t *testing.T) {
-	t.Parallel()
-
-	doc, err := asyncapi.Parse([]byte(fireEventWsDoc))
-	require.NoError(t, err)
-	schemas := []loader.SchemaInfo{{Kind: loader.KindAsyncAPI, Async: doc, Prefix: ""}}
-	srv, err := New(Config{HistorySize: DefaultHistorySize, EnableControlAPI: true}, schemas)
-	require.NoError(t, err)
-
-	ts := httptest.NewServer(srv.router)
-	defer ts.Close() //nolint:errcheck
-	body := `{"type":"explode","event":"levelUp","payload":{"level":"warn"}}`
-	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
-	require.NoError(t, err)
-	defer resp.Body.Close() //nolint:errcheck
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
-
-/*
-Scenario: Firing an event with type fire reproduces the fire behavior
-Given a management request to /_mock/events with type fire and a payload
+Scenario: Firing an event reproduces the fire behavior
+Given a management request to /_mock/events with a name and a payload
 When the events endpoint is invoked with a connected consumer
 Then the consumer receives the templated message
 
 Related spec scenarios: RS.MAPI.22, RS.AMG.20
 */
-func TestEventsEndpoint_TypeFireDelivers(t *testing.T) {
+func TestEventsEndpoint_FireDelivers(t *testing.T) {
 	t.Parallel()
 
 	doc, err := asyncapi.Parse([]byte(fireEventWsDoc))
@@ -91,7 +65,7 @@ func TestEventsEndpoint_TypeFireDelivers(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close() //nolint:errcheck
 
-	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn","message":"high load"}}`
+	body := `{"name":"levelUp","payload":{"level":"warn","message":"high load"}}`
 	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
@@ -129,7 +103,7 @@ func TestEventsEndpoint_PayloadTemplating(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close() //nolint:errcheck
 
-	body := `{"type":"fire","event":"levelUp","payload":{"level":"{$env.OASMOCK_EVENTS_TEST}","message":"high load"}}`
+	body := `{"name":"levelUp","payload":{"level":"{$env.OASMOCK_EVENTS_TEST}","message":"high load"}}`
 	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	_ = resp.Body.Close()
@@ -164,7 +138,7 @@ func TestEventsEndpoint_LegacyAliasGone(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 
-	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn"}}`
+	body := `{"name":"levelUp","payload":{"level":"warn"}}`
 	resp, err := http.Post(ts.URL+"/_mock/events/fire", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck

@@ -1,7 +1,9 @@
 ## Purpose
 
 HTTP management API for runtime control of the OASMock server, allowing dynamic addition of mock examples (OpenAPI and AsyncAPI targets with match/interval/delay), retrieval of request history, and a type-discriminated event resource to fire events.
+
 ## Requirements
+
 ### Requirement: Management API availability
 The mock server SHALL provide an HTTP API for runtime management under the `/_mock` path prefix according to [openapi](../../../../openapi.yaml) spec
 
@@ -113,10 +115,10 @@ The mock server SHALL accept a route identifier that resolves to an AsyncAPI cha
 - **THEN** the server responds with HTTP 400 (no matching route)
 
 ### Requirement: Fire an event on the event bus
-The management API SHALL expose `POST /_mock/events` to fire a named event ad-hoc. The request SHALL carry a required `type` discriminator (`"fire"` for V1, extensible), along with `event`, `payload`, `delay`, and `global` fields, reusing the event broker and its delay semantics (per `event-driver`).
+The management API SHALL expose `POST /_mock/events` to fire a named event ad-hoc. The request SHALL carry a required `name` identity (the `{$event.name}` matched by event-driven examples), along with optional `payload`, `delay`, and `global` fields, reusing the event broker and its delay semantics (per `event-driver`). The success response SHALL carry `success` and the fired event `name`. A request missing `name` SHALL be rejected with HTTP 400.
 
 #### Scenario RS.MAPI.22: Firing an event via management API
-- **WHEN** a `POST /_mock/events` request fires a named event with `type: fire`, a payload, and an optional delay
+- **WHEN** a `POST /_mock/events` request fires a named event with `name`, a payload, and an optional delay
 - **THEN** the server delivers it like a spec-triggered event (immediately or after the delay) to matching event-driven message examples
 
 #### Scenario RS.MAPI.23: Fire-event payload templating
@@ -124,7 +126,7 @@ The management API SHALL expose `POST /_mock/events` to fire a named event ad-ho
 - **THEN** they are evaluated against the schema's isolated state namespace and environment before delivery
 
 #### Scenario RS.MAPI.32: Invalid event type
-- **WHEN** a `POST /_mock/events` request omits `type` or uses a type other than `fire`
+- **WHEN** a `POST /_mock/events` request omits the required `name` identity
 - **THEN** the server responds with HTTP 400
 
 ### Requirement: Adding a runtime async-driven example
@@ -175,4 +177,3 @@ The mock server SHALL provide `DELETE /_mock/examples/{exampleId}` to remove a d
 #### Scenario RS.MAPI.31: Removing an unknown example
 - **WHEN** a DELETE request is sent to `/_mock/examples/{unknownId}` that does not exist
 - **THEN** the server responds with HTTP 404
-

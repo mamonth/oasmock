@@ -3,24 +3,26 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 	"github.com/mamonth/oasmock/internal/runtime"
 )
 
-// asyncPushRequest is the payload of POST /_mock/async/push (RS.AMG.1-7, RS.AMG.10-11).
-type asyncPushRequest struct {
+// asyncMessageRequest is the payload of POST /_mock/async/messages (RS.AMG.1-7, RS.AMG.10-11).
+type asyncMessageRequest struct {
 	Channel      string         `json:"channel"`
 	ConnectionID string         `json:"connectionId"`
 	Payload      map[string]any `json:"payload"`
 	Delay        int            `json:"delay"`
 }
 
-// handleAsyncPush pushes a message to channel consumers (immediate or delayed,
-// targeted or broadcast).
-func (s *Server) handleAsyncPush(w http.ResponseWriter, r *http.Request) {
-	req, err := decodeAsyncPush(r)
+// handleAsyncMessage pushes a message to channel consumers (immediate or
+// delayed, targeted or broadcast).
+func (s *Server) handleAsyncMessage(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeAsyncMessage(r)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -99,9 +101,9 @@ func (s *Server) prefixForChannel(channel string) string {
 	return ""
 }
 
-// decodeAsyncPush parses and validates a push request body.
-func decodeAsyncPush(r *http.Request) (asyncPushRequest, error) {
-	var req asyncPushRequest
+// decodeAsyncMessage parses and validates a message request body.
+func decodeAsyncMessage(r *http.Request) (asyncMessageRequest, error) {
+	var req asyncMessageRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		return req, err
 	}
@@ -202,24 +204,37 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"consumers": consumers})
 }
 
-// disconnectRequest is the payload of POST /_mock/async/disconnect.
+// disconnectRequest carries the control data of a force-disconnect: the target
+// consumer comes from the DELETE route path and the optional close control
+// (code/reason/abrupt) from query parameters.
 type disconnectRequest struct {
-	ConnectionID string `json:"connectionId"`
-	Reason       string `json:"reason"`
-	Code         int    `json:"code"`
-	Abrupt       bool   `json:"abrupt"`
+	ConnectionID string
+	Reason       string
+	Code         int
+	Abrupt       bool
 }
 
-// handleAsyncDisconnect force-disconnects a consumer (RS.AMG.14-17).
+// handleAsyncDisconnect force-disconnects a consumer via
+// DELETE /_mock/async/consumers/{connectionId} (RS.AMG.14-17). The consumer id
+// is read from the path and the optional control data (code, reason, abrupt)
+// from query parameters; there is no request body.
 func (s *Server) handleAsyncDisconnect(w http.ResponseWriter, r *http.Request) {
-	var req disconnectRequest
-	if err := decodeJSONBody(r, &req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
+	req := disconnectRequest{
+		ConnectionID: chi.URLParam(r, "connectionId"),
+		Reason:       r.URL.Query().Get("reason"),
+		Abrupt:       r.URL.Query().Get("abrupt") == "true",
 	}
 	if req.ConnectionID == "" {
 		writeJSONError(w, http.StatusBadRequest, "missing required field 'connectionId'")
 		return
+	}
+	if codeStr := r.URL.Query().Get("code"); codeStr != "" {
+		code, err := strconv.Atoi(codeStr)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid 'code' query parameter")
+			return
+		}
+		req.Code = code
 	}
 
 	if !s.hasConnection(req.ConnectionID) {
