@@ -55,14 +55,14 @@ func (h *RpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	pathParamsCache := make(map[string]map[string]string)
 	results := make([]json.RawMessage, 0, len(entries))
-	var singleStatusCode string
+	var singleStatusCode int
 	var singleHeaders map[string]string
 	for _, entry := range entries {
 		if entry.Error != nil {
 			results = append(results, json.RawMessage(h.protocol.ErrorResponse(entry.Error.Code, codeMessage(entry.Error.Code), entry.Error.ID)))
 			continue
 		}
-		if sc, headers := h.handleCall(entry.Call, r, pathParamsCache, &results); sc != "" {
+		if sc, headers := h.handleCall(entry.Call, r, pathParamsCache, &results); sc != 0 {
 			singleStatusCode = sc
 			singleHeaders = headers
 		}
@@ -102,7 +102,7 @@ func (h *RpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(k, v)
 	}
 	w.Header().Set("Content-Type", h.protocol.ContentType())
-	sc := parseStatusCode(singleStatusCode)
+	sc := singleStatusCode
 	if sc <= 0 {
 		sc = http.StatusOK
 	}
@@ -138,19 +138,19 @@ func isBatchRequest(body []byte) bool {
 // handleCall resolves the mapping for one JSON-RPC call and executes its mock
 // pipeline, appending a response entry (a result body or a protocol error) to
 // results for calls with an id. Notifications run without a response entry.
-// It returns the status code and response headers of a successful call ("" and
+// It returns the status code and response headers of a successful call (0 and
 // nil for notifications and errors), which the single-call path uses for the
 // standard HTTP response.
-func (h *RpcHandler) handleCall(call *RpcCall, r *http.Request, pathParamsCache map[string]map[string]string, results *[]json.RawMessage) (string, map[string]string) {
+func (h *RpcHandler) handleCall(call *RpcCall, r *http.Request, pathParamsCache map[string]map[string]string, results *[]json.RawMessage) (int, map[string]string) {
 	if call == nil {
-		return "", nil
+		return 0, nil
 	}
 	mapping, ok := h.procedureMap[call.Procedure]
 	if !ok {
 		if call.HasID {
 			*results = append(*results, json.RawMessage(h.protocol.ErrorResponse(-32601, "Method not found", call.ID)))
 		}
-		return "", nil
+		return 0, nil
 	}
 
 	// Path parameters are extracted per procedure from the request against the
@@ -163,20 +163,20 @@ func (h *RpcHandler) handleCall(call *RpcCall, r *http.Request, pathParamsCache 
 	}
 
 	if !call.HasID {
-		_, _, _, _, err := h.server.selectAndGenerateResponse(r, mapping, pathParams, call.Raw)
+		_, err := h.server.selectAndGenerateResponse(r, mapping, pathParams, call.Raw)
 		if err != nil {
 			slog.Debug("RPC notification pipeline error", "procedure", call.Procedure, "err", err)
 		}
-		return "", nil
+		return 0, nil
 	}
 
-	body, headers, statusCode, _, err := h.server.selectAndGenerateResponse(r, mapping, pathParams, call.Raw)
+	res, err := h.server.selectAndGenerateResponse(r, mapping, pathParams, call.Raw)
 	if err != nil {
 		*results = append(*results, json.RawMessage(h.protocol.ErrorResponse(-32603, "Internal error", call.ID)))
-		return "", nil
+		return 0, nil
 	}
-	*results = append(*results, json.RawMessage(body))
-	return statusCode, headers
+	*results = append(*results, json.RawMessage(res.body))
+	return res.statusCode, res.headers
 }
 
 func newRpcProtocol(cfg *loader.RpcConfig) (RpcProtocol, error) {

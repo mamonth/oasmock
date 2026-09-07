@@ -178,6 +178,14 @@ func (r *connectionRegistry) connection(id string) (*wsConnection, bool) {
 	return ws, ok
 }
 
+// Has reports whether a connection with the given id is registered.
+func (r *connectionRegistry) Has(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.byID[id]
+	return ok
+}
+
 // lowerHeaderKeys lowercases header keys so {$connection.header.<key>} lookups
 // are case-insensitive.
 func lowerHeaderKeys(h http.Header) map[string][]string {

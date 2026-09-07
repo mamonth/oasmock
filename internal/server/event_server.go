@@ -35,6 +35,14 @@ func (b *eventBus) setObserver(observer func(env manageEnvelope)) {
 // newEventBus wires a broker whose delivery goes through the messageDelivery
 // engine, plus an interval scheduler.
 func newEventBus(renderer MessageRenderer, bus ConsumerBus, verbose bool) *eventBus {
+	return newEventBusWithObserver(renderer, bus, verbose, nil)
+}
+
+// newEventBusWithObserver wires a broker plus an interval scheduler, installing
+// the management-stream observer (if any) on the bus and the delivery engine.
+// Constructing the bus with its observer avoids a partially-wired bus escaping
+// to callbacks after construction.
+func newEventBusWithObserver(renderer MessageRenderer, bus ConsumerBus, verbose bool, observer func(env manageEnvelope)) *eventBus {
 	delivery := newMessageDelivery(renderer, bus, verbose)
 	b := &eventBus{
 		scheduler: newJobScheduler(),
@@ -45,6 +53,9 @@ func newEventBus(renderer MessageRenderer, bus ConsumerBus, verbose bool) *event
 		byEvent: make(map[string][]channelSubscription),
 		deliver: delivery.deliver,
 		done:    make(chan struct{}),
+	}
+	if observer != nil {
+		b.setObserver(observer)
 	}
 	return b
 }

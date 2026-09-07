@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/mamonth/oasmock/internal/runtime"
@@ -97,7 +98,18 @@ func (e *exampleEngine) evaluateExpressionInString(str string, eval runtime.Eval
 	return e.replaceEmbeddedExpressions(str, eval)
 }
 
+// maxEvaluationDepth bounds recursive templating of nested values so a
+// pathological dynamic example cannot overflow the stack.
+const maxEvaluationDepth = 256
+
 func (e *exampleEngine) evaluateValue(val any, eval runtime.Evaluator) (any, error) {
+	return e.evaluateValueDepth(val, eval, 0)
+}
+
+func (e *exampleEngine) evaluateValueDepth(val any, eval runtime.Evaluator, depth int) (any, error) {
+	if depth > maxEvaluationDepth {
+		return nil, fmt.Errorf("value nesting exceeds maximum depth of %d", maxEvaluationDepth)
+	}
 	// Handle strings: they may contain embedded runtime expressions
 	if str, ok := val.(string); ok {
 		// Check if the whole string is a single runtime expression (no other characters)
@@ -116,7 +128,7 @@ func (e *exampleEngine) evaluateValue(val any, eval runtime.Evaluator) (any, err
 			if err != nil {
 				return nil, err
 			}
-			resolvedItem, err := e.evaluateValue(item, eval)
+			resolvedItem, err := e.evaluateValueDepth(item, eval, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -126,7 +138,7 @@ func (e *exampleEngine) evaluateValue(val any, eval runtime.Evaluator) (any, err
 	case []any:
 		result := make([]any, len(v))
 		for i, item := range v {
-			resolvedItem, err := e.evaluateValue(item, eval)
+			resolvedItem, err := e.evaluateValueDepth(item, eval, depth+1)
 			if err != nil {
 				return nil, err
 			}
