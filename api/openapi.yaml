@@ -114,8 +114,9 @@ paths:
       summary: Fire a named event on the event bus
       description: |
         Fires a named event ad-hoc, delivering it (immediately or after a delay)
-        to event-driven message examples across the loaded schemas. The request
-        carries a required type discriminator — V1 supports "fire" only.
+        to event-driven message examples across the loaded schemas. A POST to
+        the events collection is the fire action itself; the required `name`
+        identity is matched by event-driven examples.
       requestBody:
         required: true
         content:
@@ -133,12 +134,12 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '500':
           $ref: '#/components/responses/InternalError'
-  /async/push:
+  /async/messages:
     post:
-      operationId: pushToChannel
+      operationId: postMessage
       summary: Push a message to channel consumers
       description: |
-        Pushes a message to the connected consumers of an AsyncAPI channel.
+        Delivers a message to the connected consumers of an AsyncAPI channel.
         Supports immediate or delayed delivery, targeted (by connectionId) or
         broadcast push, and runtime-expression templating of the payload.
       requestBody:
@@ -146,7 +147,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PushRequest'
+              $ref: '#/components/schemas/MessagesRequest'
       responses:
         '200':
           description: Push accepted
@@ -180,19 +181,40 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConsumersResponse'
-  /async/disconnect:
-    post:
+  /async/consumers/{connectionId}:
+    delete:
       operationId: disconnectConsumer
       summary: Force-disconnect a consumer
       description: |
-        Terminates a connected consumer's WebSocket connection, with an optional
-        close reason/code, or simulates an abrupt drop.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/DisconnectRequest'
+        Terminates a connected consumer's WebSocket connection, with optional
+        close reason/code query parameters, or an abrupt flag to simulate an
+        abrupt client-side drop. The consumer id is the path parameter; there
+        is no request body.
+      parameters:
+        - name: connectionId
+          in: path
+          required: true
+          description: Active consumer connection id
+          schema:
+            type: string
+        - name: code
+          in: query
+          required: false
+          description: Optional WebSocket close code
+          schema:
+            type: integer
+        - name: reason
+          in: query
+          required: false
+          description: Optional close reason
+          schema:
+            type: string
+        - name: abrupt
+          in: query
+          required: false
+          description: Simulate an abrupt network drop (no close frame)
+          schema:
+            type: boolean
       responses:
         '200':
           description: Consumer disconnected
@@ -401,14 +423,9 @@ components:
     FireEventRequest:
       type: object
       required:
-        - type
-        - event
+        - name
       properties:
-        type:
-          type: string
-          enum: [fire]
-          description: Action discriminator. V1 supports "fire" only.
-        event:
+        name:
           type: string
           description: The named event to fire
         payload:
@@ -423,7 +440,7 @@ components:
           type: boolean
           default: false
           description: When true, the event is broadcast over all loaded schemas
-    PushRequest:
+    MessagesRequest:
       type: object
       required:
         - channel
@@ -505,30 +522,12 @@ components:
               type: string
             interval:
               type: integer
-    DisconnectRequest:
-      type: object
-      required:
-        - connectionId
-      properties:
-        connectionId:
-          type: string
-          description: Active consumer connection id
-        reason:
-          type: string
-          description: Optional close reason
-        code:
-          type: integer
-          description: Optional WebSocket close code
-        abrupt:
-          type: boolean
-          default: false
-          description: Simulate an abrupt network drop (no close frame)
     AsyncActionResponse:
       type: object
       properties:
         success:
           type: boolean
-        event:
+        name:
           type: string
           description: Fired event name (fire-event endpoints only)
     ConsumersResponse:

@@ -36,7 +36,7 @@ func TestPushEndpoint_TemplatedPayload(t *testing.T) {
 	_, _, _ = conn.ReadMessage() // consume snapshot
 
 	body := `{"channel":"/alerts","payload":{"msg":"{$env.OASMOCK_TEST_VAL}"}}`
-	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -62,7 +62,7 @@ func TestPushEndpoint_UnresolvableExpression(t *testing.T) {
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
 	body := `{"channel":"/alerts","payload":{"msg":"{$event.nonexistent}"}}`
-	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -130,9 +130,11 @@ func TestDisconnectEndpoint(t *testing.T) {
 	connID, ok := first["connectionId"].(string)
 	require.True(t, ok)
 
-	// Disconnect it.
-	disc := `{"connectionId":"` + connID + `","reason":"busy","code":4001}`
-	discResp, err := http.Post(ts.URL+"/_mock/async/disconnect", "application/json", strings.NewReader(disc))
+	// Disconnect it via DELETE with code/reason query parameters.
+	discReq, err := http.NewRequest(http.MethodDelete,
+		ts.URL+"/_mock/async/consumers/"+connID+"?reason=busy&code=4001", nil)
+	require.NoError(t, err)
+	discResp, err := http.DefaultClient.Do(discReq)
 	require.NoError(t, err)
 	defer discResp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, discResp.StatusCode)
@@ -144,7 +146,9 @@ func TestDisconnectEndpoint(t *testing.T) {
 	require.Error(t, readErr, "expected the connection to close after the disconnect")
 
 	// Unknown consumer 404.
-	unknownResp, err := http.Post(ts.URL+"/_mock/async/disconnect", "application/json", strings.NewReader(`{"connectionId":"nope"}`))
+	unknownReq, err := http.NewRequest(http.MethodDelete, ts.URL+"/_mock/async/consumers/nope", nil)
+	require.NoError(t, err)
+	unknownResp, err := http.DefaultClient.Do(unknownReq)
 	require.NoError(t, err)
 	defer unknownResp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusNotFound, unknownResp.StatusCode)
@@ -172,13 +176,13 @@ func TestAsyncManagement_LiveConnections(t *testing.T) {
 
 	// Fire an event (accepted, possibly no matching subscriber on /alerts).
 	evResp, err := http.Post(ts.URL+"/_mock/events", "application/json",
-		strings.NewReader(`{"type":"fire","event":"any","payload":{"x":1}}`))
+		strings.NewReader(`{"name":"any","payload":{"x":1}}`))
 	require.NoError(t, err)
 	_ = evResp.Body.Close()
 	assert.Equal(t, http.StatusOK, evResp.StatusCode)
 
 	// Push a message to the connected consumer.
-	pushResp, err := http.Post(ts.URL+"/_mock/async/push", "application/json",
+	pushResp, err := http.Post(ts.URL+"/_mock/async/messages", "application/json",
 		strings.NewReader(`{"channel":"/alerts","payload":{"seq":1}}`))
 	require.NoError(t, err)
 	_ = pushResp.Body.Close()
@@ -253,7 +257,7 @@ func TestPushEndpoint_TargetedWS(t *testing.T) {
 
 	// The registry hands out sequential ids (conn-1, conn-2) in dial order.
 	body := `{"channel":"/alerts","connectionId":"conn-1","payload":{"targeted":true}}`
-	post, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	post, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer post.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, post.StatusCode)
@@ -313,7 +317,7 @@ func TestPushEndpoint_TargetedSignalR(t *testing.T) {
 	require.NotEmpty(t, streamConnID)
 
 	body := `{"channel":"/priceFeed","connectionId":"` + streamConnID + `","payload":{"seq":1}}`
-	post, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	post, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer post.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, post.StatusCode)
@@ -367,8 +371,10 @@ func TestDisconnectEndpoint_Abrupt(t *testing.T) {
 	connID, ok := first["connectionId"].(string)
 	require.True(t, ok)
 
-	disc := `{"connectionId":"` + connID + `","abrupt":true}`
-	discResp, err := http.Post(ts.URL+"/_mock/async/disconnect", "application/json", strings.NewReader(disc))
+	disc := ts.URL + "/_mock/async/consumers/" + connID + "?abrupt=true"
+	discReq, err := http.NewRequest(http.MethodDelete, disc, nil)
+	require.NoError(t, err)
+	discResp, err := http.DefaultClient.Do(discReq)
 	require.NoError(t, err)
 	defer discResp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, discResp.StatusCode)

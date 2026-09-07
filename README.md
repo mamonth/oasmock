@@ -132,10 +132,10 @@ The server exposes a control HTTP API under the `/_mock` prefix. Full schema: [a
 - `POST /_mock/examples` — add a dynamic example to an existing route
   - sync (OpenAPI) targets use `path`; AsyncAPI targets use `channel` with optional `match`/`interval`/`delay` mirroring `x-mock-match`/`x-mock-interval`/`x-mock-delay` for live event-driven or recurring delivery
 - `DELETE /_mock/examples/{exampleId}` — remove a dynamic example and cancel any recurring interval delivery
-- `POST /_mock/events` — fire a named event ad-hoc with a `type` discriminator (`fire` for V1)
-- `POST /_mock/async/push` — push a message to channel consumers (immediate/delayed, targeted/broadcast)
+- `POST /_mock/events` — fire a named event ad-hoc with `{name, payload, delay, global}` (a POST to the events collection is the fire action; `name` is the `{$event.name}` matched by event-driven examples)
+- `POST /_mock/async/messages` — post a message to channel consumers (immediate/delayed, targeted/broadcast)
 - `GET /_mock/async/consumers` — list connected consumers (`channel` optional, all channels when omitted)
-- `POST /_mock/async/disconnect` — force-disconnect a consumer
+- `DELETE /_mock/async/consumers/{connectionId}` — force-disconnect a consumer (`?code=&reason=&abrupt=` query parameters for close control)
 - `GET /_mock/stream` — management WebSocket stream of runtime notifications (event/push/consumer/schedule envelopes, filtered at connect time)
 
 ## Command‑Line Interface

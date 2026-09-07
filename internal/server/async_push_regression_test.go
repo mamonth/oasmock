@@ -14,14 +14,14 @@ import (
 )
 
 /*
-Scenario: One-shot push on the canonical async path is unchanged
+Scenario: One-shot push on the messages path is unchanged
 Given a connected ws consumer and a management push targeting the canonical path
 When the push is invoked (immediate, delayed, targeted, broadcast)
 Then the consumer receives the message exactly as before the rename
 
 Related spec scenarios: RS.AMG.1, RS.AMG.5, RS.AMG.6
 */
-func TestPushCanonicalPath_Unchanged(t *testing.T) {
+func TestPushMessagesPath_Unchanged(t *testing.T) {
 	t.Parallel()
 
 	srv := newPushServer(t)
@@ -35,7 +35,7 @@ func TestPushCanonicalPath_Unchanged(t *testing.T) {
 	_, _, _ = conn.ReadMessage() // snapshot
 
 	body := `{"channel":"/alerts","payload":{"seq":1}}`
-	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -54,7 +54,7 @@ Then the message arrives after the delay
 
 Related spec scenarios: RS.AMG.6
 */
-func TestPushCanonicalPath_Delayed(t *testing.T) {
+func TestPushMessagesPath_Delayed(t *testing.T) {
 	t.Parallel()
 
 	srv := newPushServer(t)
@@ -68,7 +68,7 @@ func TestPushCanonicalPath_Delayed(t *testing.T) {
 	_, _, _ = conn.ReadMessage() // snapshot
 
 	body := `{"channel":"/alerts","payload":{"delayed":true},"delay":10}`
-	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -87,7 +87,7 @@ Then only the targeted consumer receives the message
 
 Related spec scenarios: RS.AMG.5
 */
-func TestPushCanonicalPath_Targeted(t *testing.T) {
+func TestPushMessagesPath_Targeted(t *testing.T) {
 	t.Parallel()
 
 	srv := newAsyncMgmtServer(t)
@@ -108,7 +108,7 @@ func TestPushCanonicalPath_Targeted(t *testing.T) {
 	_, _, _ = conn2.ReadMessage() // snapshot
 
 	body := `{"channel":"/alerts","connectionId":"conn-1","payload":{"targeted":true}}`
-	post, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	post, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer post.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, post.StatusCode)
@@ -131,7 +131,7 @@ Then both consumers receive the message
 
 Related spec scenarios: RS.AMG.1
 */
-func TestPushCanonicalPath_Broadcast(t *testing.T) {
+func TestPushMessagesPath_Broadcast(t *testing.T) {
 	t.Parallel()
 
 	srv := newAsyncMgmtServer(t)
@@ -150,7 +150,7 @@ func TestPushCanonicalPath_Broadcast(t *testing.T) {
 	}
 
 	body := `{"channel":"/alerts","payload":{"broadcast":true}}`
-	post, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	post, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer post.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, post.StatusCode)

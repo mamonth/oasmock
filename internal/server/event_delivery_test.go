@@ -72,7 +72,7 @@ func TestEventDelivery_TargetedByConnection(t *testing.T) {
 	waitForConnections(srv, "/alerts", 2)
 
 	// Target conn-1 via the fired event's connectionId payload.
-	body := `{"type":"fire","event":"orderCreated","payload":{"connectionId":"conn-1"}}`
+	body := `{"name":"orderCreated","payload":{"connectionId":"conn-1"}}`
 	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	_ = resp.Body.Close()
@@ -145,7 +145,7 @@ func TestEventDelivery_BroadcastFastPath(t *testing.T) {
 	defer conn2.Close() //nolint:errcheck
 	waitForConnections(srv, "/alerts", 2)
 
-	body := `{"type":"fire","event":"orderCreated","payload":{"x":1}}`
+	body := `{"name":"orderCreated","payload":{"x":1}}`
 	resp, err := http.Post(ts.URL+"/_mock/events", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	_ = resp.Body.Close()

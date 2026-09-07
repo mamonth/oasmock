@@ -47,7 +47,7 @@ func TestAddExample_RuntimeEventMatch(t *testing.T) {
 	_, _, _ = conn.ReadMessage() // consume the connect snapshot
 
 	fire, err := http.Post(ts.URL+"/_mock/events", "application/json",
-		strings.NewReader(`{"type":"fire","event":"levelUp","payload":{"msg":"boom"}}`))
+		strings.NewReader(`{"name":"levelUp","payload":{"msg":"boom"}}`))
 	require.NoError(t, err)
 	_ = fire.Body.Close()
 	assert.Equal(t, http.StatusOK, fire.StatusCode)

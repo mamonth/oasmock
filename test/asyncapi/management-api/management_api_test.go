@@ -154,7 +154,7 @@ func TestIntegration_EventMatchFired(t *testing.T) {
 	_, _, _ = conn.ReadMessage() // consume welcome snapshot
 
 	req, err := http.Post(fmt.Sprintf("http://localhost:%d/_mock/events", port), "application/json",
-		strings.NewReader(`{"type":"fire","event":"levelUp","payload":{"level":"warn","msg":"boom"}}`))
+		strings.NewReader(`{"name":"levelUp","payload":{"level":"warn","msg":"boom"}}`))
 	require.NoError(t, err)
 	_ = req.Body.Close()
 	assert.Equal(t, 200, req.StatusCode)
@@ -285,7 +285,7 @@ func TestIntegration_ConnectionTargeting(t *testing.T) {
 	connID, ok := first["connectionId"].(string)
 	require.True(t, ok)
 
-	body := `{"type":"fire","event":"levelUp","payload":{"connectionId":"` + connID + `"}}`
+	body := `{"name":"levelUp","payload":{"connectionId":"` + connID + `"}}`
 	_, err = http.Post(fmt.Sprintf("http://localhost:%d/_mock/events", port), "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 
@@ -343,7 +343,7 @@ func TestIntegration_DeprecatedAliasesGone404(t *testing.T) {
 		{http.MethodPost, "/_mock/ws/disconnect", `{"connectionId":"nope"}`},
 		{http.MethodPost, "/_mock/ws/schedule", `{"channel":"/alerts","interval":50,"payload":{"tick":true}}`},
 		{http.MethodDelete, "/_mock/ws/schedule/push-123", ""},
-		{http.MethodPost, "/_mock/events/fire", `{"type":"fire","event":"levelUp","payload":{"level":"warn"}}`},
+		{http.MethodPost, "/_mock/events/fire", `{"name":"levelUp","payload":{"level":"warn"}}`},
 	} {
 		var req *http.Request
 		var err error
@@ -378,6 +378,87 @@ func TestIntegration_ScheduleGone404(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	assert.Equal(t, 404, resp.StatusCode)
+}
+
+/*
+Scenario: Pushing a message via POST /_mock/async/messages reaches consumers
+Given a connected consumer and a management message to the new messages path
+When POST /_mock/async/messages delivers a payload to the channel
+Then the consumer receives the templated message
+
+Related spec scenarios: RS.AMG.1, RS.AMG.2, RS.AMG.6
+*/
+func TestIntegration_MessagesPush(t *testing.T) {
+	t.Parallel()
+	port, stop := startManagementServer(t)
+	defer stop()
+
+	conn := wsConnect(t, port, "/alerts")
+	defer conn.Close() //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, _ = conn.ReadMessage() // welcome
+
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/_mock/async/messages", port), "application/json",
+		strings.NewReader(`{"channel":"/alerts","payload":{"seq":7}}`))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, 200, resp.StatusCode)
+
+	got := readUntilPayload(t, conn, `"seq":7`)
+	assert.Contains(t, got, `"seq":7`)
+}
+
+/*
+Scenario: Force-disconnecting via DELETE /_mock/async/consumers/{connectionId}
+Given a connected consumer and a DELETE with a code/reason query parameter
+When the consumer is force-disconnected on the new DELETE path
+Then the connection closes and the peer observes the close
+
+Related spec scenarios: RS.AMG.14, RS.AMG.15, RS.AMG.16
+*/
+func TestIntegration_DisconnectConsumer(t *testing.T) {
+	t.Parallel()
+	port, stop := startManagementServer(t)
+	defer stop()
+
+	conn := wsConnect(t, port, "/alerts")
+	defer conn.Close() //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, _ = conn.ReadMessage() // welcome
+
+	// Identify the connection id via consumers.
+	creq, err := http.Get(fmt.Sprintf("http://localhost:%d/_mock/async/consumers?channel=/alerts", port))
+	require.NoError(t, err)
+	var cpayload map[string]any
+	require.NoError(t, json.NewDecoder(creq.Body).Decode(&cpayload))
+	creq.Body.Close() //nolint:errcheck
+	items, ok := cpayload["consumers"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, items)
+	first, ok := items[0].(map[string]any)
+	require.True(t, ok)
+	connID, ok := first["connectionId"].(string)
+	require.True(t, ok)
+
+	req, err := http.NewRequest(http.MethodDelete,
+		fmt.Sprintf("http://localhost:%d/_mock/async/consumers/%s?reason=bye&code=4001", port, connID), nil)
+	require.NoError(t, err)
+	discResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = discResp.Body.Close()
+	assert.Equal(t, 200, discResp.StatusCode)
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, _, readErr := conn.ReadMessage()
+	require.Error(t, readErr, "expected the connection to close after the disconnect")
+
+	// Unknown consumer 404.
+	unknownReq, err := http.NewRequest(http.MethodDelete, fmt.Sprintf("http://localhost:%d/_mock/async/consumers/missing", port), nil)
+	require.NoError(t, err)
+	unknownResp, err := http.DefaultClient.Do(unknownReq)
+	require.NoError(t, err)
+	_ = unknownResp.Body.Close()
+	assert.Equal(t, 404, unknownResp.StatusCode)
 }
 
 /*
@@ -446,7 +527,7 @@ func TestIntegration_ManageStream_Envelopes(t *testing.T) {
 
 	// Fire levelUp -> event and push envelopes (RS.AMG.24, RS.AMG.25).
 	_, err = http.Post(fmt.Sprintf("http://localhost:%d/_mock/events", port), "application/json",
-		strings.NewReader(`{"type":"fire","event":"levelUp","payload":{"level":"warn","msg":"boom"}}`))
+		strings.NewReader(`{"name":"levelUp","payload":{"level":"warn","msg":"boom"}}`))
 	require.NoError(t, err)
 
 	waitForEnv(t, fCol, "levelUp event", func(env map[string]any) bool {

@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Protocol-neutral async management prefix `/_mock/async/{push,consumers,disconnect}`
 - Unified example injection: `POST /_mock/examples` gains `match`/`interval`/`delay` for AsyncAPI targets (runtime mirror of `x-mock-match`/`x-mock-interval`/`x-mock-delay`), with strict context-aware validation, plus `DELETE /_mock/examples/{exampleId}` to remove and cancel recurrence
-- Single event resource `POST /_mock/events` with a `type` discriminator (V1: `fire`)
+- Single event resource `POST /_mock/events` firing a named event by its `name` identity (the `{$event.name}` matched by event-driven examples)
 - Management WebSocket stream `/_mock/stream` with connect-time `events`/`channels` filters; pushes `event`/`push`/`consumer`/`schedule` envelopes
 - Event-context matching: `{$event.name}` (identity), `{$event.data}` (whole payload) alongside `{$event.<field>}`; `{$connection.*}` per-connection recipient partition (id/channel/query/header) with broadcast fast path
 - Timing extensions `x-mock-interval` (periodic emission) and `x-mock-delay` (delayed emission); `cron` is no longer an event
@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recurring delivery moved off the schedule endpoint onto `interval` on `/_mock/examples`
 - `AddExampleRequest` is now a `oneOf` two-branch schema (sync `path` vs async `channel`) rejecting mixed targeting
 - Delivered/scheduled messages are templated at emission time so `{$event.*}`/`{$state.*}`/`{$env.*}` resolve against current state
+- **BREAKING** `POST /_mock/events` drops the required `type: "fire"` discriminator and renames the identity field `event` → `name` (request becomes `{name, payload, delay, global}`, success response becomes `{success, name}`); a body missing `name` is rejected with 400
+- **BREAKING** `POST /_mock/async/push` → `POST /_mock/async/messages` (same body `{channel, connectionId, payload, delay}`)
+- **BREAKING** `POST /_mock/async/disconnect` → `DELETE /_mock/async/consumers/{connectionId}`; the consumer id moves from the body to the path and the optional close control (`code`, `reason`, `abrupt`) becomes query parameters (no request body)
 
 ### Removed
 - Deprecated alias endpoints `POST /_mock/ws/push`, `GET /_mock/ws/consumers`, `POST /_mock/ws/disconnect` and `POST /_mock/events/fire`; the canonical `/_mock/async/*` and `POST /_mock/events` surface is the only way to reach those behaviors and any legacy `/_mock/ws/*` path answers a plain 404

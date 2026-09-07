@@ -127,9 +127,9 @@ func (s *Server) registerManagementRoutes(r chi.Router) {
 
 	// Canonical protocol-neutral async surface (design D1).
 	r.Post("/_mock/events", s.handleEvents)
-	r.Post("/_mock/async/push", s.handleAsyncPush)
+	r.Post("/_mock/async/messages", s.handleAsyncMessage)
 	r.Get("/_mock/async/consumers", s.handleAsyncConsumers)
-	r.Post("/_mock/async/disconnect", s.handleAsyncDisconnect)
+	r.Delete("/_mock/async/consumers/{connectionId}", s.handleAsyncDisconnect)
 	r.Get("/_mock/stream", s.handleManageStream)
 }
 

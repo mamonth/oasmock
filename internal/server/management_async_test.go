@@ -39,7 +39,7 @@ func TestPushEndpoint_Immediate(t *testing.T) {
 	require.NoError(t, err)
 
 	body := `{"channel":"/alerts","payload":{"msg":"hello"}}`
-	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -66,7 +66,7 @@ func TestPushEndpoint_NegativeDelay(t *testing.T) {
 	defer ts.Close()
 
 	body := `{"channel":"/alerts","payload":{},"delay":-10}`
-	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -88,7 +88,7 @@ func TestPushEndpoint_NoConsumers(t *testing.T) {
 	defer ts.Close()
 
 	body := `{"channel":"/alerts","payload":{"msg":"none"}}`
-	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -110,7 +110,7 @@ func TestPushEndpoint_UnknownConsumer(t *testing.T) {
 	defer ts.Close()
 
 	body := `{"channel":"/alerts","payload":{},"connectionId":"missing"}`
-	resp, err := http.Post(ts.URL+"/_mock/async/push", "application/json", strings.NewReader(body))
+	resp, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
