@@ -27,7 +27,7 @@ Event names SHALL be schema-local by default and server-wide only when declared 
 
 #### Scenario RS.EVT.5: Schema-local event
 - **WHEN** an OpenAPI schema fires an event without `global: true`
-- **THEN** only `x-send-events` subscriptions within the same schema receive it
+- **THEN** only matching event-driven message examples within the same schema receive it
 
 #### Scenario RS.EVT.6: Global event
 - **WHEN** an `x-event-trigger` entry sets `global: true`
@@ -82,14 +82,6 @@ The mock server SHALL narrow event-driven delivery to consumers whose connection
 #### Scenario RS.EVT.19: Targeted event delivery by connection id
 - **WHEN** an example has `x-mock-match: {'{$event.name}': orderCreated, '{$connection.id}': '{$event.connectionId}'}` and the event fires with a `connectionId` payload
 - **THEN** only the consumer whose connection id equals the payload value receives the message
-
-### Requirement: x-send-events deprecation mapping
-The mock server SHALL accept legacy `x-send-events` entries by mapping each `{on, wait}` to the unified form during loading, writing a deprecation note in verbose mode: `on` → `x-mock-match: {'{$event.name}': on}` for named/`connect`/`receive`, and `{on: cron, wait: N}` → `x-mock-interval: N`.
-
-#### Scenario RS.EVT.18: Mapping legacy x-send-events to match
-- **WHEN** a spec still uses `x-send-events: [{on: orderCreated}]` or `[{on: cron, wait: 1000}]`
-- **THEN** the server behaves as if the example declared `x-mock-match: {'{$event.name}': orderCreated}` (respectively `x-mock-interval: 1000`) and logs a deprecation note in verbose mode
-- **AND** a `{on: cron}` entry without a positive `wait` SHALL be rejected at load with an error naming the missing interval (an interval of 0 would otherwise silently register a dead reply example)
 
 ### Requirement: Management fire-event endpoint
 The mock server SHALL expose a management API endpoint to fire a named event ad-hoc, reusing the event broker and its delay semantics.

@@ -266,14 +266,12 @@ func TestParse_NoRootSignalR(t *testing.T) {
 }
 
 /*
-Scenario: Capturing x-send-events on a message example
-Given an AsyncAPI message example with an x-send-events extension
+Scenario: Capturing x-* extensions on a message example
+Given an AsyncAPI message example with an arbitrary vendor extension
 When Parse is called
-Then the neutral example view surfaces the extension
-
-Related spec scenarios: RS.EVT.7, RS.EVT.9, RS.EVT.10
+Then the neutral example view surfaces the extension generically under x-*
 */
-func TestParse_MessageExampleSendEvents(t *testing.T) {
+func TestParse_MessageExampleVendorExtensions(t *testing.T) {
 	t.Parallel()
 
 	data := []byte(`
@@ -293,10 +291,7 @@ channels:
           - name: ex1
             payload:
               level: info
-            x-send-events:
-              - on: orderCreated
-                wait: 50
-              - on: connect
+            x-mock-once: true
 operations:
   receiveAlerts:
     action: receive
@@ -309,5 +304,5 @@ operations:
 	require.Len(t, doc.Channels[0].Messages, 1)
 	examples := doc.Channels[0].Messages[0].Examples
 	require.Len(t, examples, 1)
-	assert.Contains(t, examples[0].Extensions, "x-send-events")
+	assert.Contains(t, examples[0].Extensions, "x-mock-once")
 }

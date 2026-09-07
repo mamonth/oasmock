@@ -97,10 +97,7 @@ func specBasePath(doc *openapi3.T) string {
 
 /*
 Scenario: The OpenAPI control spec documents the registered management routes
-Given the code registers the canonical /_mock/async|events|stream|examples routes,
-
-	the deprecated /_mock/ws aliases and the removed /_mock/ws/schedule 410s
-
+Given the code registers the canonical /_mock/async|events|stream|examples routes
 When the OpenAPI control spec and the router are both enumerated
 Then every registered route is documented and every documented route is real
 
@@ -329,7 +326,7 @@ func TestControlAPISpecSync_ErrorResponses(t *testing.T) {
 			}
 		}
 	}
-	require.GreaterOrEqual(t, checked, 15,
+	require.GreaterOrEqual(t, checked, 9,
 		"the control spec should document error bodies for every management operation")
 }
 

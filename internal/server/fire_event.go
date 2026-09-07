@@ -16,20 +16,6 @@ type fireEventRequest struct {
 	Global  bool           `json:"global"`
 }
 
-// handleFireEventLegacy serves the deprecated /_mock/events/fire alias,
-// accepting the pre-discriminator body (no "type" field). The alias keeps the
-// old contract so pre-change clients keep working (design D1); the canonical
-// /_mock/events endpoint still requires the type discriminator.
-func (s *Server) handleFireEventLegacy(w http.ResponseWriter, r *http.Request) {
-	var req fireEventRequest
-	if err := decodeJSONBody(r, &req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	req.Type = "fire"
-	s.dispatchFireEvent(w, req)
-}
-
 // handleEvents dispatches a discriminated event action through the event
 // broker. The type discriminator is required and only "fire" is accepted
 // (RS.MAPI.32); fire reuses the existing ad-hoc fire semantics.
@@ -42,9 +28,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	s.dispatchFireEvent(w, req)
 }
 
-// dispatchFireEvent validates and executes a fired event. Both the canonical
-// and the legacy alias decode into the shared request, so the discriminator
-// default lives next to the type checks instead of a body re-encode round trip.
+// dispatchFireEvent validates and executes a fired event.
 func (s *Server) dispatchFireEvent(w http.ResponseWriter, req fireEventRequest) {
 	if s.eventBus == nil {
 		writeJSONError(w, http.StatusInternalServerError, "event broker not initialized")

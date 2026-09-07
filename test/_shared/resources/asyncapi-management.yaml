@@ -25,8 +25,8 @@ channels:
           - name: legacyAlert
             payload:
               legacy: "{$event.level}"
-            x-send-events:
-              - on: legacyAlert
+            x-mock-match:
+              '{$event.name}': "legacyAlert"
 operations:
   receiveAlerts:
     action: receive

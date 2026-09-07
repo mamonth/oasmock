@@ -66,8 +66,8 @@ channels:
             payload:
               level: info
               account: "{$event.accountId}"
-            x-send-events:
-              - on: orderCreated
+            x-mock-match:
+              '{$event.name}': "orderCreated"
 operations:
   receiveAlerts:
     action: receive
@@ -84,7 +84,7 @@ Given a REST example with x-event-trigger and a subscribed AsyncAPI ws channel
 When a REST request selects the trigger example with a connected consumer
 Then the consumer receives the templated message with the event payload
 
-Related spec scenarios: RS.EVT.1, RS.EVT.7, RS.EVT.8, RS.EVT.12
+Related spec scenarios: RS.EVT.1, RS.EVT.12
 */
 func TestEventDriver_RESTToWS(t *testing.T) {
 	t.Parallel()
@@ -165,8 +165,8 @@ channels:
             payload:
               symbol: "{$event.symbol}"
               price: 3100
-            x-send-events:
-              - on: orderCreated
+            x-mock-match:
+              '{$event.name}': "orderCreated"
 operations:
   receivePrice:
     action: receive
@@ -180,7 +180,7 @@ Given a REST example with x-event-trigger and a subscribed SignalR hub channel
 When a REST request selects the trigger example with an open stream on the hub
 Then the consumer receives the templated message as a StreamItem
 
-Related spec scenarios: RS.EVT.1, RS.EVT.7, RS.EVT.13, RS.SHR.18
+Related spec scenarios: RS.EVT.1, RS.EVT.13, RS.SHR.18
 */
 func TestEventDriver_RESTToSignalRStream(t *testing.T) {
 	t.Parallel()

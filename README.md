@@ -138,8 +138,6 @@ The server exposes a control HTTP API under the `/_mock` prefix. Full schema: [a
 - `POST /_mock/async/disconnect` — force-disconnect a consumer
 - `GET /_mock/stream` — management WebSocket stream of runtime notifications (event/push/consumer/schedule envelopes, filtered at connect time)
 
-The legacy `/_mock/ws/*` aliases and `/_mock/events/fire` are deprecated but still work; the removed `/_mock/ws/schedule*` answers `410 Gone` pointing at the examples endpoint.
-
 ## Command‑Line Interface
 
 See [cli.md](./cli.md) for the complete CLI specification.

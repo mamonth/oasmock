@@ -32,8 +32,8 @@ channels:
             payload:
               level: "{$event.level}"
               msg: "{$event.message}"
-            x-send-events:
-              - on: levelUp
+            x-mock-match:
+              '{$event.name}': "levelUp"
 operations:
   receiveAlerts:
     action: receive

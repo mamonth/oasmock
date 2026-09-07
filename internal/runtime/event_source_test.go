@@ -13,7 +13,7 @@ Given an event payload map and a nested value
 When the EventSource is queried
 Then the payload fields resolve via {$event.*}
 
-Related spec scenarios: RS.EVT.8, RS.ATM.17
+Related spec scenarios: RS.EVT.23, RS.ATM.17
 */
 func TestEventSource_Get(t *testing.T) {
 	t.Parallel()
@@ -41,7 +41,7 @@ Given an evaluator with an event source registered as "event"
 When an expression is evaluated
 Then the event payload value is returned
 
-Related spec scenarios: RS.EVT.8
+Related spec scenarios: RS.EVT.23
 */
 func TestEvaluator_EventExpression(t *testing.T) {
 	t.Parallel()

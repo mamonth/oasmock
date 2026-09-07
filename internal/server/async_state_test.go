@@ -4,41 +4,10 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/mamonth/oasmock/internal/asyncapi"
-	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-const incrementCronDoc = `asyncapi: 3.0.0
-info:
-  title: Cron
-  version: 1.0.0
-channels:
-  feed:
-    address: /feed
-    bindings:
-      ws:
-        method: GET
-    messages:
-      tick:
-        examples:
-          - name: paced
-            payload:
-              seq: "{$state.counter}"
-            x-mock-set-state:
-              counter:
-                increment: 1
-            x-send-events:
-              - on: cron
-                wait: 1000
-operations:
-  receiveFeed:
-    action: receive
-    channel:
-      $ref: '#/channels/feed'
-`
 
 /*
 Scenario: Incrementing state from a message example
@@ -102,33 +71,4 @@ func TestRenderMessageSpecs_Delete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 	assert.Contains(t, string(out), `"done":true`)
-}
-
-/*
-Scenario: Cron subscriptions map to the periodic x-mock-interval shim
-Given a message example subscribing to the cron built-in with a wait and a
-state-backed sequence counter
-When derivedExamples maps its x-send-events entry
-Then the example becomes a periodically driven example with the wait interval,
-keeping the pace-by-state-and-cron behavior of the templating spec
-
-Related spec scenarios: RS.ATM.18, RS.EVT.18, RS.EXT.22
-*/
-func TestDerivedExamples_CronToPeriodic(t *testing.T) {
-	t.Parallel()
-
-	doc, err := asyncapi.Parse([]byte(incrementCronDoc))
-	require.NoError(t, err)
-
-	bus := newEventBus(nil, nil, false)
-	ex := doc.Channels[0].Messages[0].Examples[0]
-	derived, err := bus.derivedExamples(ex)
-	require.NoError(t, err)
-	require.Len(t, derived, 1)
-
-	view := &MessageExampleView{spec: derived[0]}
-	trig, err := extensions.ClassifyTrigger(view)
-	require.NoError(t, err)
-	assert.Equal(t, extensions.TriggerPeriodic, trig.Kind)
-	assert.Equal(t, 1000, trig.Interval)
 }
