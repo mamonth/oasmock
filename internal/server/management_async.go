@@ -9,7 +9,7 @@ import (
 	"github.com/mamonth/oasmock/internal/runtime"
 )
 
-// asyncPushRequest is the payload of POST /_mock/ws/push (RS.AMG.1-7, RS.AMG.10-11).
+// asyncPushRequest is the payload of POST /_mock/async/push (RS.AMG.1-7, RS.AMG.10-11).
 type asyncPushRequest struct {
 	Channel      string         `json:"channel"`
 	ConnectionID string         `json:"connectionId"`
@@ -202,16 +202,7 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"consumers": consumers})
 }
 
-// handleGoneSchedule answers the removed /_mock/ws/schedule surface with HTTP
-// 410 Gone pointing at POST /_mock/examples (design D1). The recurring-delivery
-// capability now lives on unified example injection with a runtime interval.
-func (s *Server) handleGoneSchedule(w http.ResponseWriter, r *http.Request) {
-	writeJSONError(w, http.StatusGone,
-		"the async schedule endpoint is removed; use POST /_mock/examples with an AsyncAPI target, response.body and interval (and DELETE /_mock/examples/{exampleId} to stop)")
-}
-
-// disconnectRequest is the payload of POST /_mock/async/disconnect
-// (and the deprecated /_mock/ws/disconnect alias).
+// disconnectRequest is the payload of POST /_mock/async/disconnect.
 type disconnectRequest struct {
 	ConnectionID string `json:"connectionId"`
 	Reason       string `json:"reason"`

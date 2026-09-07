@@ -7,13 +7,13 @@ Runtime-expression evaluation, x-mock-* example selection, state mutation and hi
 The mock server SHALL expose event payload data to subscribed AsyncAPI message examples as the `{$event.*}` data source, evaluated at emission time.
 
 #### Scenario RS.ATM.17: Evaluating an event payload expression
-- **WHEN** a message example subscribed to an event (per `event-driver` RS.EVT.7) references `{$event.orderId}`
+- **WHEN** a message example subscribed to an event (per `event-driver` RS.EVT.22) references `{$event.orderId}`
 - **AND** the fired event's payload contains key `orderId`
 - **THEN** the expression evaluates to that event payload value at emission time
 
-#### Scenario RS.ATM.18: Sequence/pacing via state and cron trigger
+#### Scenario RS.ATM.18: Sequence/pacing via state and interval
 - **WHEN** a mock consumer needs monotonic sequence numbers or paced delivery for a stream
-- **THEN** the server supports it with `x-mock-set-state` counters referenced via `{$state.*}` and the built-in `cron` send-event trigger (per `event-driver` RS.EVT.10); no dedicated sequence engine is required
+- **THEN** the server supports it with `x-mock-set-state` counters referenced via `{$state.*}` and a periodically driven `x-mock-interval` example (per `event-driver` RS.EVT.26); no dedicated sequence engine is required
 
 ### Requirement: Runtime expression evaluation on message examples
 The mock server SHALL evaluate runtime expressions in AsyncAPI message examples using the same evaluator used for OpenAPI, exposing protocol-relevant data sources: the incoming message payload, headers, the channel address, server state, environment, and event payloads.

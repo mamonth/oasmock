@@ -145,14 +145,14 @@ func TestEventsEndpoint_PayloadTemplating(t *testing.T) {
 }
 
 /*
-Scenario: The legacy /events/fire alias defaults the type discriminator
-Given a legacy management request to /_mock/events/fire without a type field
-When the alias is invoked with a connected consumer
-Then the event fires as type "fire" and the consumer receives the message
+Scenario: The removed /events/fire alias answers 404
+Given a server with the canonical events endpoint
+When a fire request is posted to the removed /_mock/events/fire path
+Then the server responds with HTTP 404 (the legacy alias is gone)
 
 Related spec scenarios: RS.MAPI.22, RS.MAPI.32
 */
-func TestEventsEndpoint_LegacyAliasDefaultsType(t *testing.T) {
+func TestEventsEndpoint_LegacyAliasGone(t *testing.T) {
 	t.Parallel()
 
 	doc, err := asyncapi.Parse([]byte(fireEventWsDoc))
@@ -163,22 +163,10 @@ func TestEventsEndpoint_LegacyAliasDefaultsType(t *testing.T) {
 
 	ts := httptest.NewServer(srv.router)
 	defer ts.Close() //nolint:errcheck
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/alerts"
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	require.NoError(t, err)
-	defer conn.Close() //nolint:errcheck
 
-	body := `{"event":"levelUp","payload":{"level":"warn","message":"legacy"}}`
+	body := `{"type":"fire","event":"levelUp","payload":{"level":"warn"}}`
 	resp, err := http.Post(ts.URL+"/_mock/events/fire", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	_, msg, err := conn.ReadMessage()
-	require.NoError(t, err)
-	var payload map[string]any
-	require.NoError(t, json.Unmarshal(msg, &payload))
-	assert.Equal(t, "warn", payload["level"])
-	assert.Equal(t, "legacy", payload["msg"])
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }

@@ -69,10 +69,10 @@ func TestPushEndpoint_UnresolvableExpression(t *testing.T) {
 }
 
 /*
-Scenario: Removed schedule endpoint answers 410 Gone
+Scenario: The removed schedule endpoint answers 404
 Given a management schedule request against the removed /_mock/ws/schedule path
 When the schedule endpoint is invoked
-Then the server responds 410 Gone pointing at POST /_mock/examples
+Then the server responds 404 Not Found (the 410 stub is removed)
 
 Related spec scenarios: RS.AMG.12
 */
@@ -92,7 +92,7 @@ func TestSchedulePush_Removed(t *testing.T) {
 	resp, err := http.Post(ts.URL+"/_mock/ws/schedule", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck
-	assert.Equal(t, http.StatusGone, resp.StatusCode)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 /*

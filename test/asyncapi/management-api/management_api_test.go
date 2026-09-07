@@ -321,54 +321,54 @@ func TestIntegration_ConnectionTargeting(t *testing.T) {
 }
 
 /*
-Scenario: The deprecated /_mock/ws/push alias still works
-Given a connected consumer and a push to the deprecated path
-When the push is invoked
-Then the message reaches the consumer
+Scenario: The deprecated /_mock/ws/* aliases answer 404 after teardown
+Given a connected consumer on a running server
+When a push is sent to each removed /_mock/ws/* path
+Then the server responds with HTTP 404 for every legacy path
 
-Related spec scenarios: RS.AMG.1, RS.AMG.6
+Related spec scenarios: RS.AMG.1, RS.AMG.6, RS.AMG.14
 */
-func TestIntegration_DeprecatedAliasStillWorks(t *testing.T) {
+func TestIntegration_DeprecatedAliasesGone404(t *testing.T) {
 	t.Parallel()
 	port, stop := startManagementServer(t)
 	defer stop()
 
-	conn := wsConnect(t, port, "/alerts")
-	defer conn.Close() //nolint:errcheck
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, _, _ = conn.ReadMessage() // welcome
-
-	body := `{"channel":"/alerts","payload":{"alias":true}}`
-	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/_mock/ws/push", port), "application/json", strings.NewReader(body))
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	assert.Equal(t, 200, resp.StatusCode)
-
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	deadline := time.Now().Add(3 * time.Second)
-	got := ""
-	for time.Now().Before(deadline) {
-		_, raw, rerr := conn.ReadMessage()
-		if rerr != nil {
-			break
+	// The deprecated alias surface is fully removed; every legacy path must
+	// answer the same plain 404 as any unknown route.
+	for _, tc := range []struct {
+		method, path, body string
+	}{
+		{http.MethodPost, "/_mock/ws/push", `{"channel":"/alerts","payload":{"alias":true}}`},
+		{http.MethodGet, "/_mock/ws/consumers?channel=/alerts", ""},
+		{http.MethodPost, "/_mock/ws/disconnect", `{"connectionId":"nope"}`},
+		{http.MethodPost, "/_mock/ws/schedule", `{"channel":"/alerts","interval":50,"payload":{"tick":true}}`},
+		{http.MethodDelete, "/_mock/ws/schedule/push-123", ""},
+		{http.MethodPost, "/_mock/events/fire", `{"type":"fire","event":"levelUp","payload":{"level":"warn"}}`},
+	} {
+		var req *http.Request
+		var err error
+		if tc.body == "" {
+			req, err = http.NewRequest(tc.method, fmt.Sprintf("http://localhost:%d%s", port, tc.path), nil)
+		} else {
+			req, err = http.NewRequest(tc.method, fmt.Sprintf("http://localhost:%d%s", port, tc.path), strings.NewReader(tc.body))
 		}
-		got = string(raw)
-		if strings.Contains(got, `"alias":true`) {
-			break
-		}
+		require.NoError(t, err)
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		assert.Equal(t, 404, resp.StatusCode, "legacy path %s %s must answer 404", tc.method, tc.path)
 	}
-	assert.Contains(t, got, `"alias":true`)
 }
 
 /*
-Scenario: The removed schedule endpoint answers 410
+Scenario: The removed schedule endpoint answers 404
 Given a request to the removed /_mock/ws/schedule path
 When the schedule endpoint is invoked
-Then the server responds with 410 Gone
+Then the server responds with 404 Not Found
 
 Related spec scenarios: RS.AMG.12, RS.AMG.13
 */
-func TestIntegration_ScheduleGone410(t *testing.T) {
+func TestIntegration_ScheduleGone404(t *testing.T) {
 	t.Parallel()
 	port, stop := startManagementServer(t)
 	defer stop()
@@ -377,7 +377,7 @@ func TestIntegration_ScheduleGone410(t *testing.T) {
 	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/_mock/ws/schedule", port), "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	_ = resp.Body.Close()
-	assert.Equal(t, 410, resp.StatusCode)
+	assert.Equal(t, 404, resp.StatusCode)
 }
 
 /*
@@ -524,32 +524,6 @@ func TestIntegration_ReceiveBuiltIn_Runtime(t *testing.T) {
 
 	got := readUntilPayload(t, conn, `"echoed":"hi"`)
 	assert.Contains(t, got, `"echoed":"hi"`)
-}
-
-/*
-Scenario: The legacy x-send-events shim still emits on a deprecated subscription
-Given a spec example declared with x-send-events: [{on: legacyAlert}]
-When the legacyAlert event fires via POST /_mock/events
-Then the shim-mapped example is emitted with the event payload
-
-Related spec scenarios: RS.EVT.18
-*/
-func TestIntegration_XSendEventsShim_LegacyEmission(t *testing.T) {
-	t.Parallel()
-	port, stop := startManagementServer(t)
-	defer stop()
-
-	conn := wsConnect(t, port, "/alerts")
-	defer conn.Close() //nolint:errcheck
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, _, _ = conn.ReadMessage() // connect built-in welcome
-
-	_, err := http.Post(fmt.Sprintf("http://localhost:%d/_mock/events", port), "application/json",
-		strings.NewReader(`{"type":"fire","event":"legacyAlert","payload":{"level":"warn"}}`))
-	require.NoError(t, err)
-
-	got := readUntilPayload(t, conn, `"legacy":"warn"`)
-	assert.Contains(t, got, `"legacy":"warn"`)
 }
 
 /*

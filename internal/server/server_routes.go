@@ -131,18 +131,6 @@ func (s *Server) registerManagementRoutes(r chi.Router) {
 	r.Get("/_mock/async/consumers", s.handleAsyncConsumers)
 	r.Post("/_mock/async/disconnect", s.handleAsyncDisconnect)
 	r.Get("/_mock/stream", s.handleManageStream)
-
-	// Deprecated aliases kept for one release (design D1). The events/fire
-	// alias serves the legacy type-less contract (handleFireEventLegacy); the
-	// ws aliases share the canonical handlers.
-	r.Post("/_mock/events/fire", s.handleFireEventLegacy)
-	r.Post("/_mock/ws/push", s.handleAsyncPush)
-	r.Get("/_mock/ws/consumers", s.handleAsyncConsumers)
-	r.Post("/_mock/ws/disconnect", s.handleAsyncDisconnect)
-
-	// Removed schedule surface answers 410 Gone pointing at /_mock/examples.
-	r.Post("/_mock/ws/schedule", s.handleGoneSchedule)
-	r.Delete("/_mock/ws/schedule/{pushId}", s.handleGoneSchedule)
 }
 
 // buildRequestSource constructs the runtime request data source from an

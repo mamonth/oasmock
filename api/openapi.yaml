@@ -133,26 +133,6 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '500':
           $ref: '#/components/responses/InternalError'
-  /events/fire:
-    post:
-      operationId: fireEventLegacy
-      summary: Fire a named event (deprecated alias)
-      description: |
-        Deprecated alias of POST /_mock/events. Accepts the legacy body without
-        the `type` discriminator (defaults to "fire"). Kept for backward
-        compatibility; use /_mock/events.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/LegacyFireEventRequest'
-      deprecated: true
-      responses:
-        '200':
-          description: Event accepted
-        '400':
-          $ref: '#/components/responses/InvalidRequest'
   /async/push:
     post:
       operationId: pushToChannel
@@ -253,101 +233,6 @@ paths:
             HTTP response body)
         '405':
           $ref: '#/components/responses/NotUpgraded'
-  /ws/push:
-    post:
-      operationId: pushToChannelLegacy
-      summary: Push a message (deprecated alias)
-      deprecated: true
-      description: Deprecated alias of POST /_mock/async/push.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PushRequest'
-      responses:
-        '200':
-          description: Push accepted
-        '400':
-          $ref: '#/components/responses/InvalidRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-  /ws/consumers:
-    get:
-      operationId: listConsumersLegacy
-      summary: List connected consumers (deprecated alias)
-      deprecated: true
-      description: Deprecated alias of GET /_mock/async/consumers.
-      parameters:
-        - name: channel
-          in: query
-          required: false
-          description: Channel address (omit for all channels)
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Consumers listed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ConsumersResponse'
-  /ws/schedule:
-    post:
-      operationId: scheduleRecurringPush
-      summary: Schedule a recurring push (removed)
-      description: |
-        Removed. Recurring delivery is expressed via the interval field on
-        POST /_mock/examples for an AsyncAPI target. This path answers 410 Gone.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ScheduleRequest'
-      responses:
-        '410':
-          $ref: '#/components/responses/GoneExamples'
-  /ws/schedule/{pushId}:
-    delete:
-      operationId: stopRecurringPush
-      summary: Stop a recurring push (removed)
-      description: |
-        Removed. Recurring delivery is stopped with DELETE /_mock/examples/{id}.
-        This path answers 410 Gone.
-      parameters:
-        - name: pushId
-          in: path
-          required: true
-          description: Push ID returned by the former schedule endpoint
-          schema:
-            type: string
-      responses:
-        '410':
-          $ref: '#/components/responses/GoneDelete'
-  /ws/disconnect:
-    post:
-      operationId: disconnectConsumerLegacy
-      summary: Force-disconnect a consumer (deprecated alias)
-      deprecated: true
-      description: Deprecated alias of POST /_mock/async/disconnect.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/DisconnectRequest'
-      responses:
-        '200':
-          description: Consumer disconnected
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AsyncActionResponse'
-        '400':
-          $ref: '#/components/responses/InvalidRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
 components:
   schemas:
     Error:
@@ -538,31 +423,6 @@ components:
           type: boolean
           default: false
           description: When true, the event is broadcast over all loaded schemas
-    LegacyFireEventRequest:
-      type: object
-      required:
-        - event
-      properties:
-        type:
-          type: string
-          enum: [fire]
-          default: fire
-          description: Optional discriminator; the legacy alias defaults to "fire"
-        event:
-          type: string
-          description: The named event to fire
-        payload:
-          type: object
-          description: Event payload exposed to consuming templates via {$event.*}
-        delay:
-          type: integer
-          minimum: 0
-          default: 0
-          description: Delivery delay in milliseconds
-        global:
-          type: boolean
-          default: false
-          description: When true, the event is broadcast over all loaded schemas
     PushRequest:
       type: object
       required:
@@ -582,22 +442,6 @@ components:
           minimum: 0
           default: 0
           description: Delivery delay in milliseconds
-    ScheduleRequest:
-      type: object
-      required:
-        - channel
-        - interval
-      properties:
-        channel:
-          type: string
-          description: AsyncAPI channel address to push to
-        interval:
-          type: integer
-          minimum: 1
-          description: Delivery interval in milliseconds
-        payload:
-          type: object
-          description: Message payload pushed at each interval
     ManageEnvelope:
       type: object
       required:
@@ -731,18 +575,6 @@ components:
             $ref: '#/components/schemas/Error'
     NotUpgraded:
       description: The request is a valid GET but did not attempt a WebSocket upgrade
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    GoneExamples:
-      description: Removed — use POST /_mock/examples with interval
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    GoneDelete:
-      description: Removed — use DELETE /_mock/examples/{exampleId}
       content:
         application/json:
           schema:

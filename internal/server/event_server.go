@@ -118,9 +118,9 @@ func (b *eventBus) shutdown() {
 // registerEventSubscriptions scans AsyncAPI schemas, classifies each message
 // example by trigger kind (event-driven via {$event.*} match, periodic via
 // x-mock-interval, or reply), and registers event-driven subscriptions keyed by
-// identity + schema. Legacy x-send-events entries are mapped to the unified
-// form with a verbose deprecation note (RS.EVT.18). Load errors (mixed match
-// contexts, dual triggers) abort schema setup (RS.EXT.20, RS.EXT.28).
+// identity + schema. A legacy x-send-events key, if present, is silently
+// ignored. Load errors (mixed match contexts, dual triggers) abort schema setup
+// (RS.EXT.20, RS.EXT.28).
 func (b *eventBus) registerEventSubscriptions(schemas []SchemaInfo) error {
 	if b == nil || b.broker == nil {
 		return nil
@@ -166,48 +166,49 @@ func (b *eventBus) registerSchema(prefix string, doc *asyncapi.Document) error {
 	return nil
 }
 
-// classifyMessageExample classifies one spec example (and its legacy
-// x-send-events derivations) into an event subscription, a periodic
-// registration, or nothing (a plain reply), appending to the commit-stage
-// accumulators.
+// classifyMessageExample classifies one spec example into an event
+// subscription, a periodic registration, or nothing (a plain reply), appending
+// to the commit-stage accumulators. Classification is driven purely by the
+// example's x-mock-match/x-mock-interval trigger extensions; a legacy
+// x-send-events key, if present, is silently ignored (RS.EVT.18 removed).
 func (b *eventBus) classifyMessageExample(channelID, msgName, address, prefix string, ex *asyncapi.Example, subs *[]channelSubscription, periodic *[]periodicRegistration) error {
 	if ex == nil {
 		return nil
 	}
-	derived, err := b.derivedExamples(ex)
-	if err != nil {
-		return err
+	spec := &loader.MessageExampleSpec{
+		Name:       ex.Name,
+		Headers:    ex.Headers,
+		Payload:    ex.Payload,
+		Extensions: ex.Extensions,
 	}
-	for _, spec := range derived {
-		trig, err := extensions.ClassifyTrigger(&MessageExampleView{spec: spec})
-		if err != nil {
-			return fmt.Errorf("channel %q example %q: %w", channelID, ex.Name, err)
-		}
-		switch trig.Kind {
-		case extensions.TriggerEvent:
-			*subs = append(*subs, channelSubscription{
-				address: address,
-				event:   trig.Identity,
-				delay:   trig.Delay,
-				messages: []*messageDeliverable{{
-					spec:   &loader.MessageSpec{Name: msgName, Examples: []*loader.MessageExampleSpec{spec}},
-					prefix: prefix,
-				}},
-			})
-		case extensions.TriggerPeriodic:
-			*periodic = append(*periodic, periodicRegistration{
-				address: address, prefix: prefix, exampleID: ex.Name, spec: spec, interval: trig.Interval,
-			})
-		case extensions.TriggerReply:
-			// Reply examples are served by the channel's normal reply path;
-			// nothing to register here. A match that still references
-			// {$connection.*} can never evaluate (no connection context in the
-			// reply path), so point it out in verbose mode instead of failing
-			// silently.
-			if b.verbose && extensions.MatchReferencesConnection(trig.Match) {
-				slog.Warn("reply example references {$connection.*} which never matches without an event context; remove the connection condition or make the example event-driven",
-					"channel", channelID, "example", ex.Name)
-			}
+	trig, err := extensions.ClassifyTrigger(&MessageExampleView{spec: spec})
+	if err != nil {
+		return fmt.Errorf("channel %q example %q: %w", channelID, ex.Name, err)
+	}
+	switch trig.Kind {
+	case extensions.TriggerEvent:
+		*subs = append(*subs, channelSubscription{
+			address: address,
+			event:   trig.Identity,
+			delay:   trig.Delay,
+			messages: []*messageDeliverable{{
+				spec:   &loader.MessageSpec{Name: msgName, Examples: []*loader.MessageExampleSpec{spec}},
+				prefix: prefix,
+			}},
+		})
+	case extensions.TriggerPeriodic:
+		*periodic = append(*periodic, periodicRegistration{
+			address: address, prefix: prefix, exampleID: ex.Name, spec: spec, interval: trig.Interval,
+		})
+	case extensions.TriggerReply:
+		// Reply examples are served by the channel's normal reply path;
+		// nothing to register here. A match that still references
+		// {$connection.*} can never evaluate (no connection context in the
+		// reply path), so point it out in verbose mode instead of failing
+		// silently.
+		if b.verbose && extensions.MatchReferencesConnection(trig.Match) {
+			slog.Warn("reply example references {$connection.*} which never matches without an event context; remove the connection condition or make the example event-driven",
+				"channel", channelID, "example", ex.Name)
 		}
 	}
 	return nil
@@ -312,86 +313,6 @@ func (b *eventBus) removeIntervalJob(jobID string) {
 		}
 		b.observer(env)
 	}
-}
-
-// derivedExamples maps one spec example into the example specs to register.
-// An example without x-send-events maps to itself. A legacy x-send-events
-// example maps through the deprecation shim: each entry becomes the unified
-// form ({on} → {$event.name} match, {on: cron, wait} → x-mock-interval) with a
-// verbose-mode deprecation note (RS.EVT.18).
-func (b *eventBus) derivedExamples(ex *asyncapi.Example) ([]*loader.MessageExampleSpec, error) {
-	events, err := parseSendEvents(ex.Extensions)
-	if err != nil {
-		return nil, fmt.Errorf("example %q: %w", ex.Name, err)
-	}
-	if len(events) == 0 {
-		return []*loader.MessageExampleSpec{{
-			Name:       ex.Name,
-			Headers:    ex.Headers,
-			Payload:    ex.Payload,
-			Extensions: ex.Extensions,
-		}}, nil
-	}
-	out := make([]*loader.MessageExampleSpec, 0, len(events))
-	for _, ev := range events {
-		ext := cloneExtensions(ex.Extensions)
-		delete(ext, xSendEventsKey)
-		if ev.On == "cron" {
-			if ev.Wait <= 0 {
-				return nil, fmt.Errorf("example %q: x-send-events {on: cron} requires a positive wait interval (use x-mock-interval)", ex.Name)
-			}
-			if b.verbose {
-				slog.Warn("x-send-events is deprecated; use x-mock-interval", "example", ex.Name)
-			}
-			ext["x-mock-interval"] = ev.Wait
-		} else {
-			if b.verbose {
-				slog.Warn("x-send-events is deprecated; use x-mock-match: {'{$event.name}': <name>}", "example", ex.Name)
-			}
-			match, ok := ext["x-mock-match"].(map[string]any)
-			if !ok {
-				// A pre-existing, non-object x-mock-match would be silently lost
-				// if overwritten; fail loud so the spec author fixes it.
-				if _, present := ext["x-mock-match"]; present {
-					return nil, fmt.Errorf("example %q: x-mock-match must be an object when combined with x-send-events", ex.Name)
-				}
-				match = make(map[string]any)
-			}
-			match["{$event.name}"] = ev.On
-			ext["x-mock-match"] = match
-			if ev.On == "connect" || ev.On == "receive" {
-				if ev.On == "connect" && ev.Wait > 0 {
-					ext["x-mock-delay"] = ev.Wait
-				}
-			}
-		}
-		out = append(out, &loader.MessageExampleSpec{
-			Name:       ex.Name,
-			Headers:    ex.Headers,
-			Payload:    ex.Payload,
-			Extensions: ext,
-		})
-	}
-	return out, nil
-}
-
-// cloneExtensions deep-copies an example's extension map. Nested maps (e.g.
-// x-mock-match) are copied too, so a legacy example with several x-send-events
-// entries never shares the match map across the derived clones.
-func cloneExtensions(ext map[string]any) map[string]any {
-	out := make(map[string]any, len(ext))
-	for k, v := range ext {
-		if m, ok := v.(map[string]any); ok {
-			inner := make(map[string]any, len(m))
-			for ik, iv := range m {
-				inner[ik] = iv
-			}
-			out[k] = inner
-			continue
-		}
-		out[k] = v
-	}
-	return out
 }
 
 // deliver renders the subscribed message with the event payload and emits it

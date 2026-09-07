@@ -103,17 +103,6 @@ examples:
 
 Timing values are integer milliseconds: a fractional value (e.g. `x-mock-interval: 2.5`) is rejected at load instead of being silently truncated. Periodically driven examples honor `x-mock-skip` like every other example and are not emitted while it is set.
 
-### x-send-events (deprecated)
-
-**Location**: AsyncAPI message example object
-
-**Deprecated**: kept for one release with a loader mapping shim. Each entry is translated to the unified form during loading with a verbose-mode deprecation note:
-
-- `{on: <name>}` → `x-mock-match: {'{$event.name}': <name>}`
-- `{on: connect, wait: N}` → `x-mock-match: {'{$event.name}': connect}` + `x-mock-delay: N`
-- `{on: receive}` → `x-mock-match: {'{$event.name}': receive}`
-- `{on: cron, wait: N}` → `x-mock-interval: N`
-
 ### Runtime matches and timing (management API)
 
 `POST /_mock/examples` mirrors the extensions for AsyncAPI targets with `match`, `interval` and `delay` fields; the same classification and delivery rules apply. See `api/openapi.yaml`.

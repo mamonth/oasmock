@@ -355,3 +355,59 @@ func TestEventDelivery_PeriodicSkipsSkippedExample(t *testing.T) {
 	_, _, rerr := conn.ReadMessage()
 	require.Error(t, rerr, "a skipped periodic example must not be emitted")
 }
+
+const legacyXSendEventsDoc = `asyncapi: 3.0.0
+info:
+  title: Legacy
+  version: 1.0.0
+channels:
+  alerts:
+    address: /alerts
+    bindings:
+      ws:
+        method: GET
+    messages:
+      alertMsg:
+        examples:
+          - name: named
+            payload:
+              level: "{$event.level}"
+            x-send-events:
+              - on: legacyAlert
+          - name: cron
+            payload:
+              seq: 1
+            x-send-events:
+              - on: cron
+                wait: 1000
+operations:
+  receiveAlerts:
+    action: receive
+    channel:
+      $ref: '#/channels/alerts'
+`
+
+/*
+Scenario: A legacy x-send-events key is silently ignored when classifying
+Given message examples whose only extension is x-send-events (named and cron)
+When registerSchema classifies them
+Then no subscription, no interval job and no load error result (the key no longer
+maps to the unified trigger form)
+
+Related spec scenarios: RS.EVT.5
+*/
+func TestSchemaRegistration_XSendEventsSilentlyIgnored(t *testing.T) {
+	t.Parallel()
+
+	doc, err := asyncapi.Parse([]byte(legacyXSendEventsDoc))
+	require.NoError(t, err)
+
+	bus := newEventBus(&stubMessageRenderer{}, &stubConsumerBus{}, false)
+	require.NoError(t, bus.registerSchema("", doc))
+
+	// Neither legacy key may register anything: the named entry would surface
+	// as a "legacyAlert" subscription, the cron entry as an interval job.
+	assert.Len(t, bus.broker.byEvent, 0, "x-send-events must not register any event subscription")
+	assert.False(t, bus.scheduler.started("interval---/alerts-cron"),
+		"x-send-events cron must not schedule an interval job")
+}
