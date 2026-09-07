@@ -58,9 +58,12 @@ func (s *Server) findAsyncRouteMapping(protocol, channel, method string) *RouteM
 }
 
 // addExampleRequestSchema is the oneOf two-branch request schema for
-// POST /_mock/examples (design D2). Branch A is the sync (OpenAPI) target:
-// required path+response and no async-only fields. Branch B is the async
-// (AsyncAPI) target: required channel+response and no path.
+// POST /_mock/examples (design D2). The target discriminator is: the sync
+// (OpenAPI) branch requires `path`+`response` and forbids every async-only
+// field (protocol/channel/match/interval/delay); the async (AsyncAPI) branch
+// requires `channel`+`response` and forbids `path`. The fence is deliberately
+// strict so a future third target kind requires extending these oneOf branches
+// (and the validation tests) rather than silently accepting mixed targeting.
 var addExampleRequestSchema = gojsonschema.NewGoLoader(map[string]any{
 	"type":     "object",
 	"required": []string{"response"},

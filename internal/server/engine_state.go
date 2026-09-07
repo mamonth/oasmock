@@ -27,28 +27,12 @@ func (e *exampleEngine) handleIncrementState(prefix, resolvedKey string, incVal 
 		}
 		return err
 	}
-	// Convert to float64
-	var delta float64
-	switch v := resolvedInc.(type) {
-	case float64:
-		delta = v
-	case int:
-		delta = float64(v)
-	case string:
-		// Try to parse as number
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			delta = f
-		} else {
-			if e.verbose {
-				slog.Debug("Increment value is not a number", "value", v)
-			}
-			return fmt.Errorf("increment value is not a number: %s", v)
-		}
-	default:
+	delta, err := coerceNumber(resolvedInc)
+	if err != nil {
 		if e.verbose {
-			slog.Debug("Increment value has unsupported type", "type", fmt.Sprintf("%T", v))
+			slog.Debug("Increment value is not a number", "value", resolvedInc, "error", err)
 		}
-		return fmt.Errorf("increment value has unsupported type: %T", v)
+		return err
 	}
 	newVal, err := e.stateStore.Increment(prefix, resolvedKey, delta)
 	if err != nil {
@@ -61,6 +45,25 @@ func (e *exampleEngine) handleIncrementState(prefix, resolvedKey string, incVal 
 		slog.Debug("Incremented state", "key", resolvedKey, "namespace", prefix, "delta", delta, "newValue", newVal)
 	}
 	return nil
+}
+
+// coerceNumber converts an increment delta value to float64, accepting numeric
+// and numeric-string representations.
+func coerceNumber(v any) (float64, error) {
+	switch x := v.(type) {
+	case float64:
+		return x, nil
+	case int:
+		return float64(x), nil
+	case string:
+		f, err := strconv.ParseFloat(x, 64)
+		if err != nil {
+			return 0, fmt.Errorf("increment value is not a number: %s", x)
+		}
+		return f, nil
+	default:
+		return 0, fmt.Errorf("increment value has unsupported type: %T", x)
+	}
 }
 
 func (e *exampleEngine) handleValueObjectState(prefix, resolvedKey string, valObj any, eval runtime.Evaluator) error {

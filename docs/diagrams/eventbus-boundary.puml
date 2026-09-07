@@ -1,0 +1,59 @@
+@startuml
+' Event-bus boundary: pure coordinator package vs server wiring.
+' See docs/architecture.md §2.2 and the WS-A refactor description.
+
+skinparam componentStyle rectangle
+skinparam backgroundColor #FFFFFF
+
+package "internal/eventbus (pure, leaf)" {
+  component "Broker" as Broker {
+    note right
+      Subscription registry keyed by event identity + schema scope.
+      Decoupled from HTTP, SignalR, Server.
+    end note
+  }
+
+  component "Scheduler" as Scheduler {
+    note right
+      Per-example interval jobs with panic containment.
+      Delivery injected per job.
+    end note
+  }
+
+  interface "EventDeliverer" as ED
+  Broker ..> ED : "injected delivery func"
+  Broker ..> "loader.MessageSpec" : "message deliverables"
+}
+
+package "internal/server (wiring)" {
+  component "eventBus" as EB {
+    note bottom
+      Orchestrates broker + scheduler + delivery engine.
+      Fires events, classifies spec examples, drives periodic jobs.
+    end note
+  }
+
+  component "messageDelivery" as MD {
+    note bottom
+      Renders and delivers via MessageRenderer / ConsumerBus.
+      Owns recipient partition, delayed emission, push observer.
+    end note
+  }
+
+  component "MessageRenderer" as MR
+  component "ConsumerBus" as CB
+  component "manageStream" as MS
+  component "exampleEngine" as EE
+  component "hubManager" as HM
+}
+
+EB --> Broker : "own"
+EB --> Scheduler : "own"
+EB --> MD : "deliver"
+MD --> MR
+MD --> CB
+MD --> MS : "push observer"
+EE ..> MR : "implements"
+HM ..> CB : "implements"
+
+@enduml

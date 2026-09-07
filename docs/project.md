@@ -20,7 +20,7 @@
     - `test/_shared/resources` - Various resources (e.g. yaml, json files incl. AsyncAPI fixtures)
 - `third_party/` - Vendored dependencies (AsyncAPI parser `go-asyncapi`, wired via `go.mod` `replace`)
 - `docs/` - Project documentation
-  - `docs/diagrams` - PlantUML diagrams (container for extracted `.puml` files)
+  - `docs/diagrams` - PlantUML diagrams (container for extracted `.puml` files, e.g. `eventbus-boundary.puml` documenting the pure `internal/eventbus` coordinator package)
 
 ## Conventions
 

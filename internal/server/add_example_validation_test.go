@@ -335,3 +335,36 @@ func TestAddExampleValidation_ValidateFlag(t *testing.T) {
 	defer resp3.Body.Close() //nolint:errcheck
 	assert.Equal(t, http.StatusOK, resp3.StatusCode, "a conforming body must pass validation")
 }
+
+/*
+Scenario: The sync/async target discriminator is strict
+Given the POST /_mock/examples oneOf fence
+When a body mixes a sync target field (path) with an async target field
+Then the request is rejected with HTTP 400 -- the fence only accepts the two
+declared target kinds, and mixing them is invalid (RS.MAPI.27)
+
+Related spec scenarios: RS.MAPI.27
+*/
+func TestAddExampleValidation_DiscriminatorFence(t *testing.T) {
+	t.Parallel()
+
+	schemas := []loader.SchemaInfo{{Kind: loader.KindOpenAPI, Spec: mustOpenAPISpec(t, validateOpenAPISpec), Prefix: ""}}
+	srv, err := New(Config{HistorySize: DefaultHistorySize, EnableControlAPI: true}, schemas)
+	require.NoError(t, err)
+	ts := httptest.NewServer(srv.router)
+	defer ts.Close() //nolint:errcheck
+
+	// A sync (path) target carrying any async-only field violates the sync
+	// branch's `not` and the async branch's `not.path`, so the oneOf yields no
+	// matching branch and the request is rejected.
+	invalidBodies := []string{
+		`{"path":"/validate","protocol":"http","response":{"code":200}}`,
+		`{"path":"/validate","channel":"/alerts","response":{"code":200}}`,
+		`{"path":"/validate","interval":100,"response":{"code":200}}`,
+	}
+	for _, body := range invalidBodies {
+		resp := postExample(t, ts.URL, body)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "body=%s", body)
+		resp.Body.Close() //nolint:errcheck
+	}
+}

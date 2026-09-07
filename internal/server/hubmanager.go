@@ -1,6 +1,10 @@
 package server
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mamonth/oasmock/internal/asyncapi"
+)
 
 // hubManager owns the SignalR hubs built from AsyncAPI documents and the raw
 // ws protocol adapter, exposing connection lookup and payload delivery behind
@@ -104,6 +108,7 @@ func (m *hubManager) Candidates(address string) []ConsumerInfo {
 				Channel:      ws.channel,
 				Query:        ws.query,
 				Headers:      ws.headers,
+				Protocol:     asyncapi.ProtocolWS,
 			})
 		}
 	}
@@ -122,6 +127,7 @@ func (m *hubManager) Candidates(address string) []ConsumerInfo {
 				Query:        hub.conns.connectionMetadata(connID),
 				Headers:      hub.conns.connectionHeaders(connID),
 				Streams:      []map[string]string{st},
+				Protocol:     asyncapi.ProtocolSignalR,
 			})
 		}
 	}

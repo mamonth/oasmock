@@ -6,6 +6,15 @@ import (
 	"github.com/mamonth/oasmock/internal/state"
 )
 
+// The wrappers below adapt the concrete infrastructure types (state.Manager,
+// history.RingBuffer, loader) to the Server's dependency interfaces. They keep
+// the Server testable through mock_server without accepting the concrete
+// *state.Manager/*history.RingBuffer/*loader types directly: unit tests inject
+// generated mocks of StateStore/HistoryStore/RouteProvider (see mock/), and the
+// wrappers turn the production implementations into those interfaces. The
+// pass-through methods are intentional — they exist only to satisfy the
+// interface contract, not to add behavior.
+
 // loaderRouteProvider wraps loader package to implement RouteProvider.
 type loaderRouteProvider struct{}
 

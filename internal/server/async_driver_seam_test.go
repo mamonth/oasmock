@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/mamonth/oasmock/internal/eventbus"
 	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/stretchr/testify/require"
@@ -20,7 +21,7 @@ type stubAsyncDriver struct {
 	registered *loader.MessageExampleSpec
 }
 
-func (d *stubAsyncDriver) fire(name string, payload map[string]any, schema string, global bool, delay *delaySchedule) {
+func (d *stubAsyncDriver) fire(name string, payload map[string]any, schema string, global bool, delay *eventbus.DelaySchedule) {
 	d.fired = append(d.fired, name)
 }
 func (d *stubAsyncDriver) fireTargeted(name string, payload map[string]any, schema string, recipient ConsumerInfo) {

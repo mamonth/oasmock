@@ -58,7 +58,7 @@ func (s *Server) wireBuiltInHooks() {
 			s.notifyConsumerLifecycle("connected", channel, info)
 		},
 		OnDisconnect: func(channel, connID string) {
-			s.notifyConsumerLifecycle("disconnected", channel, ConsumerInfo{ConnectionID: connID, Channel: channel})
+			s.notifyConsumerLifecycle("disconnected", channel, ConsumerInfo{ConnectionID: connID, Channel: channel, Protocol: asyncapi.ProtocolWS})
 		},
 	}
 	if adapter, ok := s.protocolAdapters[asyncapi.ProtocolWS].(*wsProtocolAdapter); ok && adapter != nil {

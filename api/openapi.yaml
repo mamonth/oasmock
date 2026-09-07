@@ -269,6 +269,12 @@ components:
       type: object
       required:
         - response
+      description: |
+        Target discriminator: include `path` (plus optional `method`) to target a
+        sync OpenAPI operation; include `channel` (plus optional `protocol`) to
+        target an async AsyncAPI channel. Mixing target kinds is rejected: the
+        sync branch forbids any async-only field (protocol/channel/match/
+        interval/delay), and the async branch forbids `path`.
       oneOf:
         - title: sync (OpenAPI)
           required:
@@ -503,6 +509,9 @@ components:
               type: string
             channel:
               type: string
+            protocol:
+              type: string
+              enum: [ws, signalr]
             streams:
               type: array
               items:
@@ -542,6 +551,9 @@ components:
                 type: string
               channel:
                 type: string
+              protocol:
+                type: string
+                enum: [ws, signalr]
               streams:
                 type: array
                 items:

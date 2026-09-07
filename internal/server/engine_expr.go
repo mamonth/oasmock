@@ -12,6 +12,12 @@ import (
 // Runtime expression evaluation
 // ---------------------------------------------------------------------------
 
+// replaceEmbeddedExpressions scans a string for {$...} runtime expressions,
+// tracking brace depth across nested expressions. It is a stateful scanner with
+// several interleaved branches (literal/evaluate/nested-brace fallback), so its
+// cyclomatic surface is kept in one place rather than split across helpers.
+//
+//nolint:gocyclo,gocognit // intentional brace-depth scan state machine
 func (e *exampleEngine) replaceEmbeddedExpressions(str string, eval runtime.Evaluator) (string, error) {
 	var result strings.Builder
 	i := 0
@@ -106,6 +112,11 @@ func (e *exampleEngine) evaluateValue(val any, eval runtime.Evaluator) (any, err
 	return e.evaluateValueDepth(val, eval, 0)
 }
 
+// evaluateValueDepth recursively templates nested JSON values, branching on
+// string/object/array/literal forms at every level. The branching is inherent
+// to the value grammar; the depth bound guards stack overflow.
+//
+//nolint:gocyclo // inherent JSON shape switch
 func (e *exampleEngine) evaluateValueDepth(val any, eval runtime.Evaluator, depth int) (any, error) {
 	if depth > maxEvaluationDepth {
 		return nil, fmt.Errorf("value nesting exceeds maximum depth of %d", maxEvaluationDepth)

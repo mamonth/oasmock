@@ -39,6 +39,7 @@ type manageConsumerEnvelope struct {
 	Action       string              `json:"action"`
 	ConnectionID string              `json:"connectionId"`
 	Channel      string              `json:"channel"`
+	Protocol     string              `json:"protocol,omitempty"`
 	Streams      []map[string]string `json:"streams,omitempty"`
 }
 
@@ -126,29 +127,36 @@ func filterMatches(f streamFilter, env manageEnvelope) bool {
 		return false
 	}
 	if len(f.channels) > 0 {
-		channel := ""
-		switch env.Type {
-		case "push":
-			if env.Push != nil {
-				channel = env.Push.Channel
-			}
-		case "consumer":
-			if env.Consumer != nil {
-				channel = env.Consumer.Channel
-			}
-		case "schedule":
-			if env.Schedule != nil {
-				channel = env.Schedule.Channel
-			}
-		case "event":
-			// Event envelopes carry a schema scope, not a channel; the channels
-			// filter does not apply to them.
-		}
+		channel := envelopeChannel(env)
 		if channel != "" && !globMatchAny(f.channels, channel) {
 			return false
 		}
 	}
 	return true
+}
+
+// envelopeChannel resolves the channel a notification envelope refers to. Event
+// envelopes carry a schema scope, not a channel, so the channels filter does
+// not apply to them (empty result).
+func envelopeChannel(env manageEnvelope) string {
+	switch env.Type {
+	case "push":
+		if env.Push != nil {
+			return env.Push.Channel
+		}
+	case "consumer":
+		if env.Consumer != nil {
+			return env.Consumer.Channel
+		}
+	case "schedule":
+		if env.Schedule != nil {
+			return env.Schedule.Channel
+		}
+	case "event":
+		// Event envelopes carry a schema scope, not a channel; the channels
+		// filter does not apply to them.
+	}
+	return ""
 }
 
 // globMatchAny reports whether a value matches any comma-separated glob in the
@@ -166,6 +174,8 @@ func globMatchAny(patterns []string, value string) bool {
 // segment between '*'s must appear in value in order. The first segment is
 // anchored to the start when the pattern begins with a literal, and the last
 // segment is anchored to the end when the pattern ends with a literal.
+//
+//nolint:gocyclo // segment-anchoring walk over split glob parts
 func globMatch(pattern, value string) bool {
 	if pattern == "*" {
 		return true
@@ -325,6 +335,7 @@ func (ms *manageStream) notifyConsumer(action, channel string, info ConsumerInfo
 			Action:       action,
 			ConnectionID: info.ConnectionID,
 			Channel:      channel,
+			Protocol:     info.Protocol,
 			Streams:      info.Streams,
 		},
 	})

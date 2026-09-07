@@ -287,6 +287,91 @@ func TestRpcParseError(t *testing.T) {
 }
 
 /*
+Scenario: Mocked non-2xx status surfaces in X-Mock-Status, transport stays 200
+Given an RPC gateway with a procedure declaring a 502 response
+When a single JSON-RPC call hits it
+Then the transport status is 200 and X-Mock-Status is 502
+
+Related spec scenarios: RS.JRP.35
+*/
+func TestRpcMockedStatusInHeader(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	cmd, errCh, port := clihelper.Cmd(t).SetSchema("../_shared/resources/test-rpc.yaml", "").Run()
+	defer clihelper.StopServer(t, cmd)
+
+	if !clihelper.WaitForServer(t, port, 2*time.Second) {
+		t.Fatal("server did not start within timeout")
+	}
+
+	body := `{"jsonrpc":"2.0","method":"status","params":{},"id":1}`
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc", port), "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "JSON-RPC transport must always answer 200 for a single call")
+	assert.Equal(t, "502", resp.Header.Get("X-Mock-Status"), "mocked status must be carried in X-Mock-Status")
+
+	var result map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	require.NoError(t, err)
+	assert.Equal(t, "bad-gateway", result["result"])
+	assert.Equal(t, float64(1), result["id"])
+
+	select {
+	case err := <-errCh:
+		if err != nil && err.Error() != "signal: terminated" {
+			t.Logf("server process exited with error: %v", err)
+		}
+	default:
+	}
+}
+
+/*
+Scenario: Procedure path parameters resolve via the mounted procedure route
+Given an RPC procedure /rpc/users/{id}
+When a call is posted directly to /rpc/users/123
+Then the procedure executes and {$request.path.id} resolves to 123
+
+Related spec scenarios: RS.JRP.34
+*/
+func TestRpcProcedurePathResolves(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	cmd, errCh, port := clihelper.Cmd(t).SetSchema("../_shared/resources/test-rpc.yaml", "").Run()
+	defer clihelper.StopServer(t, cmd)
+
+	if !clihelper.WaitForServer(t, port, 2*time.Second) {
+		t.Fatal("server did not start within timeout")
+	}
+
+	body := `{"jsonrpc":"2.0","method":"getUser","id":1}`
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/rpc/users/123", port), "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	require.NoError(t, err)
+	assert.Equal(t, "user-123", result["result"])
+	assert.Equal(t, float64(1), result["id"])
+
+	select {
+	case err := <-errCh:
+		if err != nil && err.Error() != "signal: terminated" {
+			t.Logf("server process exited with error: %v", err)
+		}
+	default:
+	}
+}
+
+/*
 Scenario: RPC and HTTP routes coexist in the same spec
 Given a schema with both RPC gateway and normal HTTP routes
 When both endpoints are called

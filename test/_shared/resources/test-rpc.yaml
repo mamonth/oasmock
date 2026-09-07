@@ -159,6 +159,25 @@ paths:
                     jsonrpc: "2.0"
                     result: with-headers
                     id: "{$request.body.id}"
+  /rpc/status:
+    post:
+      operationId: status
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "502":
+          description: Bad Gateway
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    jsonrpc: "2.0"
+                    result: bad-gateway
+                    id: "{$request.body.id}"
   /rpc/paramsMatch:
     post:
       operationId: paramsMatch
@@ -184,4 +203,24 @@ paths:
                   value:
                     jsonrpc: "2.0"
                     result: user-response
+                    id: "{$request.body.id}"
+  /rpc/users/{id}:
+    post:
+      operationId: getUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              examples:
+                default:
+                  value:
+                    jsonrpc: "2.0"
+                    result: "user-{$request.path.id}"
                     id: "{$request.body.id}"

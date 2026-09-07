@@ -483,7 +483,7 @@ func TestReplaceEmbeddedExpressions(t *testing.T) {
 Scenario: Extracting path parameters from HTTP request
 Given an HTTP request with Chi route context containing URL parameters
 When extractPathParams is called
-Then it returns a map with parameter names and values
+Then it returns a map with parameter names and values only when chi populated them
 
 Related spec scenarios: RS.MSC.5
 */
@@ -516,13 +516,13 @@ func TestExtractPathParams(t *testing.T) {
 			want:    map[string]string{},
 		},
 		{
-			name: "no chi context but mapping chi pattern has params",
+			name: "no chi context yields no params even with a parameterized pattern",
 			setupRequest: func() *http.Request {
 				req, _ := http.NewRequest(http.MethodGet, "/users/123", nil)
 				return req
 			},
 			mapping: &RouteMapping{ChiPattern: "/users/{id}"},
-			want:    map[string]string{"id": "123"},
+			want:    map[string]string{},
 		},
 		{
 			name: "with path parameters",
@@ -1909,14 +1909,59 @@ func TestSelectResponse(t *testing.T) {
 }
 
 /*
-	Scenario: parseStatusCode converts status code string to int
-	Given a status code string
-	When parseStatusCode is called
-	Then it should return the appropriate integer status code
+Scenario: responseOrder gives a declarative total order over response keys
+Given pairs of response-status keys (numeric, default, non-numeric)
+When responseOrder compares them
+Then numeric codes sort ascending, "default" last, non-numeric fallback lexical
 
-	Related spec scenarios: RS.MSC.27
+Related spec scenarios: RS.MSC.8, RS.MSC.9
 */
+func TestResponseOrder(t *testing.T) {
+	t.Parallel()
 
+	tests := []struct {
+		name string
+		a, b string
+		want int // sign of expected comparison
+	}{
+		{name: "numeric ascending", a: "200", b: "201", want: -1},
+		{name: "numeric descending reversed", a: "500", b: "404", want: 1},
+		{name: "numeric before default", a: "200", b: "default", want: -1},
+		{name: "default after numeric", a: "default", b: "200", want: 1},
+		{name: "default equals default", a: "default", b: "default", want: 0},
+		{name: "numeric before non-numeric", a: "200", b: "foo", want: -1},
+		{name: "non-numeric after numeric", a: "bar", b: "200", want: 1},
+		{name: "non-numeric lexical", a: "abc", b: "abd", want: -1},
+		{name: "non-numeric lexical reversed", a: "zed", b: "aaa", want: 1},
+		{name: "non-numeric equal", a: "xyz", b: "xyz", want: 0},
+		{name: "default last over non-numeric", a: "default", b: "abc", want: 1},
+		{name: "non-numeric before default", a: "abc", b: "default", want: -1},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := responseOrder(tt.a, tt.b)
+			if tt.want < 0 {
+				assert.Negative(t, got)
+			} else if tt.want > 0 {
+				assert.Positive(t, got)
+			} else {
+				assert.Zero(t, got)
+			}
+		})
+	}
+}
+
+/*
+Scenario: parseStatusCode converts status code string to int
+Given a status code string
+When parseStatusCode is called
+Then it should return the appropriate integer status code
+
+Related spec scenarios: RS.MSC.27
+*/
 func TestParseStatusCode(t *testing.T) {
 	t.Parallel()
 

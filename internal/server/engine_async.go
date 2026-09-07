@@ -103,7 +103,10 @@ func (e *exampleEngine) asyncRequestSource(in InboundMessage) *runtime.RequestSo
 }
 
 // selectAsyncExample selects a message example using the x-mock-* semantics
-// (skip, once, params-match) shared with the OpenAPI pipeline.
+// (skip, once, params-match) shared with the OpenAPI pipeline. The branches
+// cover the selection predicates; they are inherent to the semantics.
+//
+//nolint:gocyclo // selection predicate matrix (skip/once/match)
 func (e *exampleEngine) SelectAsyncExample(message *loader.MessageSpec, evaluator runtime.Evaluator, opID string) (*MessageExampleView, string) {
 	if message == nil {
 		return nil, ""

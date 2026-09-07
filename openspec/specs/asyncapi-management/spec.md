@@ -44,7 +44,7 @@ The mock server SHALL expose the currently connected consumers per AsyncAPI chan
 
 #### Scenario RS.AMG.8: Listing connected consumers
 - **WHEN** a management request queries consumers for an AsyncAPI channel with active connections
-- **THEN** the server returns the consumer list with connection IDs, channel/address details, and open streams (for SignalR hubs)
+- **THEN** the server returns the consumer list with connection IDs, channel/address details, the consumer's `protocol` (`ws` for raw WebSocket or `signalr` for SignalR), and open streams (for SignalR hubs)
 
 #### Scenario RS.AMG.9: Listing consumers for a channel with no connections
 - **WHEN** a management request queries consumers for an AsyncAPI channel with no active connections
@@ -52,7 +52,7 @@ The mock server SHALL expose the currently connected consumers per AsyncAPI chan
 
 #### Scenario RS.AMG.22: Listing all consumers without a channel filter
 - **WHEN** a management request queries consumers without a `channel` parameter and consumers are connected on multiple channels
-- **THEN** the server returns a single flat list of consumers across all channels (raw ws and SignalR), and an empty list when none are connected
+- **THEN** the server returns a single flat list of consumers across all channels (raw ws and SignalR, each tagged with its `protocol`), and an empty list when none are connected
 
 ### Requirement: Templated push payloads
 Pushed message payloads SHALL support runtime expressions ({$state.*}, {$env.*}) evaluated at delivery time, using the schema's state namespace.
@@ -120,7 +120,7 @@ The mock server SHALL expose a general management WebSocket stream at `GET /_moc
 
 #### Scenario RS.AMG.26: Receiving consumer lifecycle envelopes
 - **WHEN** a consumer connects to or disconnects from a channel (raw ws or SignalR)
-- **THEN** a subscribed client receives an envelope of type `consumer` with a `connected`/`disconnected` action, connection ID, and channel
+- **THEN** a subscribed client receives an envelope of type `consumer` with a `connected`/`disconnected` action, connection ID, channel, and the consumer's `protocol`
 
 #### Scenario RS.AMG.27: Receiving schedule start/stop envelopes
 - **WHEN** a periodic message example is registered with `interval` via `POST /_mock/examples` (or spec `x-mock-interval`) or removed via `DELETE /_mock/examples/{exampleId}`

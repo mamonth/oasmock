@@ -15,6 +15,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/go-chi/chi/v5"
+	"github.com/mamonth/oasmock/internal/eventbus"
 	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/runtime"
 )
@@ -272,11 +273,11 @@ func (s *Server) fireExampleTriggers(example *openapi3.Example, prefix string) {
 }
 
 // triggerDelay maps a trigger delay (ms) to a schedule.
-func triggerDelay(ms int) *delaySchedule {
+func triggerDelay(ms int) *eventbus.DelaySchedule {
 	if ms <= 0 {
 		return nil
 	}
-	return &delaySchedule{ms: ms}
+	return &eventbus.DelaySchedule{Ms: ms}
 }
 
 func parseStatusCode(codeStr string) int {
@@ -359,12 +360,14 @@ func (s *Server) verboseLoggingMiddleware(next http.Handler) http.Handler {
 }
 
 // extractPathParams extracts path parameters from the request using chi URL
-// params, falling back to pattern-matching the request path against the
-// mapping's brace-form ChiPattern when chi has not populated them (the RPC
-// gateway dispatch and direct handler invocations).
+// params. Path parameters are only authoritative when chi has routed the
+// request against a brace-form pattern (mock routes, protocol adapters and the
+// RPC gateway's procedure routes); non-routed invocations yield no params.
 func (s *Server) extractPathParams(r *http.Request, mapping *RouteMapping) map[string]string {
 	params := make(map[string]string)
-	// Get chi route context
+	if r == nil {
+		return params
+	}
 	ctx := chi.RouteContext(r.Context())
 	if s.config.Verbose {
 		slog.Debug("extractPathParams", "ctxNil", ctx == nil, "method", r.Method, "path", r.URL.Path, "chiPattern", mapping.ChiPattern)
@@ -376,42 +379,6 @@ func (s *Server) extractPathParams(r *http.Request, mapping *RouteMapping) map[s
 				params[key] = ctx.URLParams.Values[i]
 			}
 		}
-		if len(params) > 0 {
-			return params
-		}
 	}
-	if mapping == nil || r == nil || r.URL == nil {
-		return params
-	}
-	matchPathParams(params, r.URL.Path, mapping.ChiPattern)
 	return params
-}
-
-// matchPathParams extracts {param} captures by matching each segment of the
-// actual request path against the corresponding segment of the brace-form chi
-// pattern. Only well-formed brace segments capture; literal and malformed
-// segments must match exactly.
-func matchPathParams(params map[string]string, path, pattern string) {
-	if pattern == "" || path == "" {
-		return
-	}
-	patSegs := splitPathSegments(pattern)
-	pathSegs := splitPathSegments(path)
-	if len(patSegs) != len(pathSegs) {
-		return
-	}
-	for i, seg := range patSegs {
-		if len(seg) > 2 && seg[0] == '{' && seg[len(seg)-1] == '}' {
-			name := seg[1 : len(seg)-1]
-			if name != "" && !strings.ContainsAny(name, " \t") {
-				params[name] = pathSegs[i]
-			}
-		}
-	}
-}
-
-// splitPathSegments splits an absolute path on "/" preserving empty segments
-// for exact length comparison.
-func splitPathSegments(p string) []string {
-	return strings.Split(p, "/")
 }

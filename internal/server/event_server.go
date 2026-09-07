@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mamonth/oasmock/internal/asyncapi"
+	"github.com/mamonth/oasmock/internal/eventbus"
 	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/loader"
 )
@@ -15,8 +16,8 @@ import (
 // broker and the interval scheduler, and delegates message rendering/delivery
 // to the messageDelivery engine. It never reaches into Server.
 type eventBus struct {
-	broker    *eventBroker
-	scheduler *jobScheduler
+	broker    *eventbus.Broker
+	scheduler *eventbus.Scheduler
 	delivery  *messageDelivery
 	verbose   bool
 	// observer, when set, is invoked with event and schedule envelopes so the
@@ -45,15 +46,11 @@ func newEventBus(renderer MessageRenderer, bus ConsumerBus, verbose bool) *event
 func newEventBusWithObserver(renderer MessageRenderer, bus ConsumerBus, verbose bool, observer func(env manageEnvelope)) *eventBus {
 	delivery := newMessageDelivery(renderer, bus, verbose)
 	b := &eventBus{
-		scheduler: newJobScheduler(),
+		scheduler: eventbus.NewScheduler(),
 		delivery:  delivery,
 		verbose:   verbose,
 	}
-	b.broker = &eventBroker{
-		byEvent: make(map[string][]channelSubscription),
-		deliver: delivery.deliver,
-		done:    make(chan struct{}),
-	}
+	b.broker = eventbus.NewBroker(delivery.deliver)
 	if observer != nil {
 		b.setObserver(observer)
 	}
@@ -61,7 +58,7 @@ func newEventBusWithObserver(renderer MessageRenderer, bus ConsumerBus, verbose 
 }
 
 // fire dispatches a named event, reusing the broker's delay semantics.
-func (b *eventBus) fire(name string, payload map[string]any, firingSchema string, global bool, delay *delaySchedule) {
+func (b *eventBus) fire(name string, payload map[string]any, firingSchema string, global bool, delay *eventbus.DelaySchedule) {
 	if b == nil || b.broker == nil {
 		return
 	}
@@ -70,7 +67,7 @@ func (b *eventBus) fire(name string, payload map[string]any, firingSchema string
 		env.Event = &manageEventEnvelope{Name: name, Schema: firingSchema, Global: global, Payload: payload}
 		b.observer(env)
 	}
-	b.broker.fire(name, payload, firingSchema, global, delay)
+	b.broker.Fire(name, payload, firingSchema, global, delay)
 }
 
 // fireTargeted fires a built-in event scoped to a single recipient connection
@@ -86,7 +83,7 @@ func (b *eventBus) fireTargeted(name string, payload map[string]any, firingSchem
 		env.Event = &manageEventEnvelope{Name: name, Schema: firingSchema, Global: false, Payload: payload}
 		b.observer(env)
 	}
-	subs, _ := b.broker.resolveSubscribers(name, firingSchema)
+	subs, _ := b.broker.ResolveSubscribers(name, firingSchema)
 	if len(subs) == 0 {
 		return
 	}
@@ -110,7 +107,7 @@ func (b *eventBus) doneChannel() <-chan struct{} {
 // hasSubscribers reports whether any event-driven example could match an
 // event identity within a schema scope (cheap gate for built-in firing).
 func (b *eventBus) hasSubscribers(name, schema string) bool {
-	return b.broker != nil && b.broker.hasSubscribers(name, schema)
+	return b.broker != nil && b.broker.HasSubscribers(name, schema)
 }
 
 // shutdown cancels all periodic interval jobs and cancels pending delayed
@@ -120,10 +117,10 @@ func (b *eventBus) shutdown() {
 		return
 	}
 	if b.scheduler != nil {
-		b.scheduler.shutdown()
+		b.scheduler.Shutdown()
 	}
 	b.delivery.shutdown()
-	b.broker.stop()
+	b.broker.Stop()
 }
 
 // registerEventSubscriptions scans AsyncAPI schemas, classifies each message
@@ -154,7 +151,7 @@ func (b *eventBus) registerEventSubscriptions(schemas []SchemaInfo) error {
 // only when all pass are subscriptions and scheduler jobs committed (design
 // D4, RS.EXT.20/22/28).
 func (b *eventBus) registerSchema(prefix string, doc *asyncapi.Document) error {
-	var subs []channelSubscription
+	var subs []eventbus.ChannelSubscription
 	var periodic []periodicRegistration
 	for _, ch := range doc.Channels {
 		address := asyncAddressWithPrefix(prefix, ch.Address)
@@ -168,7 +165,7 @@ func (b *eventBus) registerSchema(prefix string, doc *asyncapi.Document) error {
 	}
 	// Commit phase: nothing above has side effects, so a classification error
 	// from any example leaves the eventBus untouched.
-	b.broker.addSubscriptions(prefix, subs)
+	b.broker.AddSubscriptions(prefix, subs)
 	for _, p := range periodic {
 		if _, err := b.registerPeriodic(p.address, p.prefix, p.exampleID, p.spec, p.interval); err != nil {
 			return err
@@ -182,7 +179,7 @@ func (b *eventBus) registerSchema(prefix string, doc *asyncapi.Document) error {
 // to the commit-stage accumulators. Classification is driven purely by the
 // example's x-mock-match/x-mock-interval trigger extensions; a legacy
 // x-send-events key, if present, is silently ignored (RS.EVT.18 removed).
-func (b *eventBus) classifyMessageExample(channelID, msgName, address, prefix string, ex *asyncapi.Example, subs *[]channelSubscription, periodic *[]periodicRegistration) error {
+func (b *eventBus) classifyMessageExample(channelID, msgName, address, prefix string, ex *asyncapi.Example, subs *[]eventbus.ChannelSubscription, periodic *[]periodicRegistration) error {
 	if ex == nil {
 		return nil
 	}
@@ -198,13 +195,13 @@ func (b *eventBus) classifyMessageExample(channelID, msgName, address, prefix st
 	}
 	switch trig.Kind {
 	case extensions.TriggerEvent:
-		*subs = append(*subs, channelSubscription{
-			address: address,
-			event:   trig.Identity,
-			delay:   trig.Delay,
-			messages: []*messageDeliverable{{
-				spec:   &loader.MessageSpec{Name: msgName, Examples: []*loader.MessageExampleSpec{spec}},
-				prefix: prefix,
+		*subs = append(*subs, eventbus.ChannelSubscription{
+			Address: address,
+			Event:   trig.Identity,
+			Delay:   trig.Delay,
+			Messages: []*eventbus.MessageDeliverable{{
+				Spec:   &loader.MessageSpec{Name: msgName, Examples: []*loader.MessageExampleSpec{spec}},
+				Prefix: prefix,
 			}},
 		})
 	case extensions.TriggerPeriodic:
@@ -250,13 +247,13 @@ func (b *eventBus) registerRuntimeExample(id, address, prefix string, spec *load
 	}
 	switch trig.Kind {
 	case extensions.TriggerEvent:
-		b.broker.addSubscriptions(prefix, []channelSubscription{{
-			address: address,
-			event:   trig.Identity,
-			delay:   trig.Delay,
-			messages: []*messageDeliverable{{
-				spec:   &loader.MessageSpec{Name: "runtime-" + id, Examples: []*loader.MessageExampleSpec{spec}},
-				prefix: prefix,
+		b.broker.AddSubscriptions(prefix, []eventbus.ChannelSubscription{{
+			Address: address,
+			Event:   trig.Identity,
+			Delay:   trig.Delay,
+			Messages: []*eventbus.MessageDeliverable{{
+				Spec:   &loader.MessageSpec{Name: "runtime-" + id, Examples: []*loader.MessageExampleSpec{spec}},
+				Prefix: prefix,
 			}},
 		}})
 		return extensions.TriggerEvent, "", nil
@@ -276,7 +273,7 @@ func (b *eventBus) removeEventSubscription(prefix, id string) {
 	if b == nil || b.broker == nil {
 		return
 	}
-	b.broker.removeRuntimeExample(prefix, id)
+	b.broker.RemoveRuntimeExample(prefix, id)
 }
 
 // registerPeriodic schedules a scheduler job delivering a periodically driven
@@ -289,16 +286,16 @@ func (b *eventBus) registerPeriodic(address, prefix, exampleID string, spec *loa
 	}
 	jobID := fmt.Sprintf("interval-%s-%s-%s", prefix, address, exampleID)
 	opID := "event:interval:" + address
-	job := b.scheduler.add(&scheduledJob{
-		id:        jobID,
-		interval:  time.Duration(interval) * time.Millisecond,
-		exampleID: exampleID,
-		channel:   address,
-		deliver: func() {
+	job := b.scheduler.Add(&eventbus.ScheduledJob{
+		ID:        jobID,
+		Interval:  time.Duration(interval) * time.Millisecond,
+		ExampleID: exampleID,
+		Channel:   address,
+		Deliver: func() {
 			b.delivery.deliverPeriodic(address, prefix, spec, opID)
 		},
 	})
-	go b.scheduler.run(job)
+	go b.scheduler.Run(job)
 	if b.observer != nil {
 		env := manageEnvelope{Type: "schedule"}
 		env.Schedule = &manageScheduleEnvelope{Action: "started", ExampleID: exampleID, Channel: address, Interval: interval}
@@ -313,14 +310,14 @@ func (b *eventBus) removeIntervalJob(jobID string) {
 	if b == nil || b.scheduler == nil || jobID == "" {
 		return
 	}
-	job, cancelled := b.scheduler.cancel(jobID)
+	job, cancelled := b.scheduler.Cancel(jobID)
 	if cancelled && b.observer != nil {
 		env := manageEnvelope{Type: "schedule"}
 		env.Schedule = &manageScheduleEnvelope{
 			Action:    "stopped",
-			ExampleID: cmp.Or(job.exampleID, jobID),
-			Channel:   job.channel,
-			Interval:  int(job.interval.Milliseconds()),
+			ExampleID: cmp.Or(job.ExampleID, jobID),
+			Channel:   job.Channel,
+			Interval:  int(job.Interval.Milliseconds()),
 		}
 		b.observer(env)
 	}

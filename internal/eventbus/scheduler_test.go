@@ -1,4 +1,4 @@
-package server
+package eventbus
 
 import (
 	"sync/atomic"
@@ -17,17 +17,17 @@ Then the delivery callback fires repeatedly at the configured interval
 
 Related spec scenarios: RS.EXT.22, RS.MAPI.25
 */
-func TestJobScheduler_DeliversAtCadence(t *testing.T) {
+func TestScheduler_DeliversAtCadence(t *testing.T) {
 	t.Parallel()
 
-	sched := newJobScheduler()
-	defer sched.shutdown()
+	sched := NewScheduler()
+	defer sched.Shutdown()
 
 	var count atomic.Int32
-	job := sched.add(&scheduledJob{id: "ex-1", interval: 10 * time.Millisecond, deliver: func() {
+	job := sched.Add(&ScheduledJob{ID: "ex-1", Interval: 10 * time.Millisecond, Deliver: func() {
 		count.Add(1)
 	}})
-	go sched.run(job)
+	go sched.Run(job)
 
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for count.Load() < 2 && time.Now().Before(deadline) {
@@ -44,17 +44,17 @@ Then no further deliveries occur after cancellation
 
 Related spec scenarios: RS.EXT.22, RS.MAPI.30
 */
-func TestJobScheduler_CancelStops(t *testing.T) {
+func TestScheduler_CancelStops(t *testing.T) {
 	t.Parallel()
 
-	sched := newJobScheduler()
-	defer sched.shutdown()
+	sched := NewScheduler()
+	defer sched.Shutdown()
 
 	var count atomic.Int32
-	job := sched.add(&scheduledJob{id: "ex-1", interval: 5 * time.Millisecond, deliver: func() {
+	job := sched.Add(&ScheduledJob{ID: "ex-1", Interval: 5 * time.Millisecond, Deliver: func() {
 		count.Add(1)
 	}})
-	go sched.run(job)
+	go sched.Run(job)
 
 	deadline := time.Now().Add(100 * time.Millisecond)
 	for count.Load() < 2 && time.Now().Before(deadline) {
@@ -63,9 +63,9 @@ func TestJobScheduler_CancelStops(t *testing.T) {
 	before := count.Load()
 	require.GreaterOrEqual(t, before, int32(2))
 
-	job, ok := sched.cancel("ex-1")
+	removed, ok := sched.Cancel("ex-1")
 	require.True(t, ok)
-	require.NotNil(t, job)
+	require.NotNil(t, removed)
 
 	time.Sleep(40 * time.Millisecond)
 	// At most the one tick already in flight at the moment of cancellation may
@@ -81,15 +81,15 @@ Then the jobs are cancelled and registered entries removed
 
 Related spec scenarios: RS.MAPI.25, RS.MSC.49
 */
-func TestJobScheduler_Shutdown(t *testing.T) {
+func TestScheduler_Shutdown(t *testing.T) {
 	t.Parallel()
 
-	sched := newJobScheduler()
+	sched := NewScheduler()
 	var count atomic.Int32
-	job := sched.add(&scheduledJob{id: "ex-1", interval: 5 * time.Millisecond, deliver: func() {
+	job := sched.Add(&ScheduledJob{ID: "ex-1", Interval: 5 * time.Millisecond, Deliver: func() {
 		count.Add(1)
 	}})
-	go sched.run(job)
+	go sched.Run(job)
 
 	deadline := time.Now().Add(100 * time.Millisecond)
 	for count.Load() < 2 && time.Now().Before(deadline) {
@@ -97,9 +97,9 @@ func TestJobScheduler_Shutdown(t *testing.T) {
 	}
 	require.GreaterOrEqual(t, count.Load(), int32(2))
 
-	sched.shutdown()
+	sched.Shutdown()
 	time.Sleep(30 * time.Millisecond)
-	assert.True(t, sched.stopped("ex-1"))
+	assert.True(t, sched.Stopped("ex-1"))
 }
 
 /*
@@ -110,12 +110,12 @@ Then it reports false and leaves no error
 
 Related spec scenarios: RS.MAPI.31
 */
-func TestJobScheduler_CancelUnknown(t *testing.T) {
+func TestScheduler_CancelUnknown(t *testing.T) {
 	t.Parallel()
 
-	sched := newJobScheduler()
-	defer sched.shutdown()
-	job, ok := sched.cancel("unknown")
+	sched := NewScheduler()
+	defer sched.Shutdown()
+	job, ok := sched.Cancel("unknown")
 	assert.False(t, ok)
 	assert.Nil(t, job)
 }
@@ -128,17 +128,17 @@ Then the previous job's deliveries stop and only the new job delivers onward
 
 Related spec scenarios: RS.EXT.22, RS.MAPI.25
 */
-func TestJobScheduler_AddReplacesAndStopsPrevious(t *testing.T) {
+func TestScheduler_AddReplacesAndStopsPrevious(t *testing.T) {
 	t.Parallel()
 
-	sched := newJobScheduler()
-	defer sched.shutdown()
+	sched := NewScheduler()
+	defer sched.Shutdown()
 
 	var oldCount atomic.Int32
-	jobA := sched.add(&scheduledJob{id: "ex-1", interval: 5 * time.Millisecond, deliver: func() {
+	jobA := sched.Add(&ScheduledJob{ID: "ex-1", Interval: 5 * time.Millisecond, Deliver: func() {
 		oldCount.Add(1)
 	}})
-	go sched.run(jobA)
+	go sched.Run(jobA)
 
 	deadline := time.Now().Add(100 * time.Millisecond)
 	for oldCount.Load() < 2 && time.Now().Before(deadline) {
@@ -147,10 +147,10 @@ func TestJobScheduler_AddReplacesAndStopsPrevious(t *testing.T) {
 	require.GreaterOrEqual(t, oldCount.Load(), int32(2))
 
 	var newCount atomic.Int32
-	jobB := sched.add(&scheduledJob{id: "ex-1", interval: 5 * time.Millisecond, deliver: func() {
+	jobB := sched.Add(&ScheduledJob{ID: "ex-1", Interval: 5 * time.Millisecond, Deliver: func() {
 		newCount.Add(1)
 	}})
-	go sched.run(jobB)
+	go sched.Run(jobB)
 
 	deadline = time.Now().Add(100 * time.Millisecond)
 	for newCount.Load() < 2 && time.Now().Before(deadline) {
@@ -172,38 +172,38 @@ serving other jobs instead of silently losing the cadence
 
 Related spec scenarios: RS.EXT.22, RS.MAPI.25
 */
-func TestJobScheduler_PanicInDeliverRemovesJob(t *testing.T) {
+func TestScheduler_PanicInDeliverRemovesJob(t *testing.T) {
 	t.Parallel()
 
-	sched := newJobScheduler()
-	defer sched.shutdown()
+	sched := NewScheduler()
+	defer sched.Shutdown()
 
 	var poisoned atomic.Bool
 	poisoned.Store(true)
-	job := sched.add(&scheduledJob{
-		id:       "boom",
-		interval: 5 * time.Millisecond,
-		deliver: func() {
+	job := sched.Add(&ScheduledJob{
+		ID:       "boom",
+		Interval: 5 * time.Millisecond,
+		Deliver: func() {
 			if poisoned.Load() {
 				poisoned.Store(false)
 				panic("deliver exploded")
 			}
 		},
 	})
-	go sched.run(job)
+	go sched.Run(job)
 
 	deadline := time.Now().Add(time.Second)
-	for sched.started("boom") && time.Now().Before(deadline) {
+	for sched.Started("boom") && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
-	assert.False(t, sched.started("boom"), "a panicking job must be removed from the scheduler")
+	assert.False(t, sched.Started("boom"), "a panicking job must be removed from the scheduler")
 
 	// The scheduler must remain usable for subsequently added jobs.
 	var healthy atomic.Int32
-	good := sched.add(&scheduledJob{id: "healthy", interval: 5 * time.Millisecond, deliver: func() {
+	good := sched.Add(&ScheduledJob{ID: "healthy", Interval: 5 * time.Millisecond, Deliver: func() {
 		healthy.Add(1)
 	}})
-	go sched.run(good)
+	go sched.Run(good)
 
 	deadline = time.Now().Add(500 * time.Millisecond)
 	for healthy.Load() < 2 && time.Now().Before(deadline) {

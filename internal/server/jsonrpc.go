@@ -32,6 +32,11 @@ func writeBody(w http.ResponseWriter, body []byte) {
 	}
 }
 
+// ServeHTTP implements the JSON-RPC over HTTP gateway. It is a state machine
+// over the batch/single/notification/error response matrix, with the mocked
+// status carried in X-Mock-Status on an always-200 transport.
+//
+//nolint:gocyclo // intentional JSON-RPC response-matrix state machine
 func (h *RpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize))
 	if err != nil {
@@ -102,11 +107,15 @@ func (h *RpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(k, v)
 	}
 	w.Header().Set("Content-Type", h.protocol.ContentType())
+	// JSON-RPC over HTTP: the transport is always 200, whether the call is a
+	// result or a protocol error (the JSON-RPC error lives in the body). The
+	// mocked HTTP status of the selected example is carried in a non-transport
+	// header so a mocked non-2xx status never conflates with a transport error.
 	sc := singleStatusCode
-	if sc <= 0 {
-		sc = http.StatusOK
+	if sc > 0 && sc != http.StatusOK {
+		w.Header().Set("X-Mock-Status", strconv.Itoa(sc))
 	}
-	w.WriteHeader(sc)
+	w.WriteHeader(http.StatusOK)
 	writeBody(w, results[0])
 }
 
@@ -138,9 +147,9 @@ func isBatchRequest(body []byte) bool {
 // handleCall resolves the mapping for one JSON-RPC call and executes its mock
 // pipeline, appending a response entry (a result body or a protocol error) to
 // results for calls with an id. Notifications run without a response entry.
-// It returns the status code and response headers of a successful call (0 and
-// nil for notifications and errors), which the single-call path uses for the
-// standard HTTP response.
+// It returns the mocked status code and response headers of a successful call
+// (0 and nil for notifications and errors); the single-call path surfaces the
+// mocked status only through the X-Mock-Status header and responds HTTP 200.
 func (h *RpcHandler) handleCall(call *RpcCall, r *http.Request, pathParamsCache map[string]map[string]string, results *[]json.RawMessage) (int, map[string]string) {
 	if call == nil {
 		return 0, nil

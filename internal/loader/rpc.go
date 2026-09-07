@@ -15,6 +15,7 @@ var supportedProtocols = map[string]bool{
 	ProtocolTypeJsonRpc: true,
 }
 
+//nolint:gocyclo // x-rpc field extraction branches
 func ParseRpcConfig(spec *openapi3.T) (*RpcConfig, error) {
 	ext := spec.Extensions["x-rpc"]
 	if ext == nil {
@@ -68,6 +69,7 @@ func ParseRpcConfig(spec *openapi3.T) (*RpcConfig, error) {
 	return cfg, nil
 }
 
+//nolint:gocyclo // per-path RPC mapping construction branches
 func BuildRpcMappings(infos []SchemaInfo, cfg *RpcConfig) ([]*RpcRouteMapping, error) {
 	if cfg == nil {
 		return nil, nil

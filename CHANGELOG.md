@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Consumers listable without a `channel` filter — flat union across all channels (raw ws + SignalR streams)
 
 ### Changed
+- JSON-RPC over HTTP always answers transport `200` for a single-call result or
+  error; a mocked example's non-2xx status is exposed in the `X-Mock-Status`
+  response header instead of becoming the transport status (previously a mocked
+  `500` returned HTTP 500)
+- Each RPC procedure's own path is now mounted as a route, so a procedure may
+  be invoked at `/rpc/users/123` as well as at the gateway; path parameters
+  resolve through chi via the procedure's brace-form pattern (RS.JRP.34)
 - Recurring delivery moved off the schedule endpoint onto `interval` on `/_mock/examples`
 - `AddExampleRequest` is now a `oneOf` two-branch schema (sync `path` vs async `channel`) rejecting mixed targeting
 - Delivered/scheduled messages are templated at emission time so `{$event.*}`/`{$state.*}`/`{$env.*}` resolve against current state

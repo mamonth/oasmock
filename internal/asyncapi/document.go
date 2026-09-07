@@ -18,8 +18,9 @@ const (
 
 // Supported protocols for the MVP mock server.
 const (
-	ProtocolHTTP = "http"
-	ProtocolWS   = "ws"
+	ProtocolHTTP    = "http"
+	ProtocolWS      = "ws"
+	ProtocolSignalR = "signalr"
 )
 
 // Document is the root of a parsed AsyncAPI document.

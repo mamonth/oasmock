@@ -151,6 +151,10 @@ components:
           type: string
         channel:
           type: string
+        protocol:
+          type: string
+          enum: [ws, signalr]
+          description: Consumer transport (ws for raw WebSocket, signalr for SignalR)
         streams:
           type: array
           items:

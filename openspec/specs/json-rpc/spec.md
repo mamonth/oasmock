@@ -134,8 +134,19 @@ The mock server SHALL evaluate `{$request.body.*}` against the individual call o
 - **THEN** each call's `x-mock-params-match` conditions evaluate against its own params object, not the batch array
 
 #### Scenario RS.JRP.34: Procedure path parameters resolve through the gateway
-- **WHEN** a procedure is backed by a route such as `/rpc/users/{id}` and the request URL is `/rpc/users/123`
-- **THEN** `{$request.path.id}` resolves to `123` (the params are extracted against the procedure's own route pattern, not the gateway route)
+- **WHEN** a procedure is backed by a route such as `/rpc/users/{id}` and a client posts to `/rpc/users/123` (the procedure's own path is mounted as a route alongside the gateway)
+- **THEN** `{$request.path.id}` resolves to `123` (chi captures the params against the procedure's brace-form route pattern, without a manual URL fallback)
+
+### Requirement: HTTP transport semantics
+The mock server SHALL answer JSON-RPC over HTTP with a transport status of 200 for every valid single-call or batch response, whether the call produced a JSON-RPC result or a JSON-RPC error, and SHALL NOT use a mocked example's HTTP status code as the transport status. A mocked example's non-200 status SHALL be exposed in the `X-Mock-Status` response header instead.
+
+#### Scenario RS.JRP.35: Mocked non-2xx status uses the X-Mock-Status header
+- **WHEN** a procedure's selected example declares a response status of `502`
+- **THEN** the HTTP response status is `200` and the response carries an `X-Mock-Status: 502` header
+
+#### Scenario RS.JRP.36: Default 200 mocked status sets no X-Mock-Status header
+- **WHEN** a procedure's selected example declares the default `200` response
+- **THEN** the HTTP response status is `200` and no `X-Mock-Status` header is present
 
 ### Requirement: Extension compatibility
 All existing `x-mock-*` extensions SHALL work identically for JSON-RPC calls as for HTTP requests.

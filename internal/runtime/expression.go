@@ -356,6 +356,10 @@ func (e *evaluator) AddSource(name string, source DataSource) {
 }
 
 // Evaluate evaluates a runtime expression like "{$request.path.id}".
+// It branches on the expression grammar: format, modifier, source lookup,
+// missing-path defaulting and modifier dispatch.
+//
+//nolint:gocyclo // expression-grammar branches
 func (e *evaluator) Evaluate(expr string) (any, error) {
 	if !strings.HasPrefix(expr, "{$") || !strings.HasSuffix(expr, "}") {
 		return nil, fmt.Errorf("invalid expression format: %s", expr)

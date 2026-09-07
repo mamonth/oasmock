@@ -52,6 +52,8 @@ type MessageExampleSpec struct {
 // channels with unknown/missing binding info. When the document declares root
 // x-signalr, its ws channels are served by the SignalR hub and are not mapped
 // to raw ws routes (design D7).
+//
+//nolint:gocyclo // per-channel protocol/operation mapping branches
 func buildAsyncRouteMappings(info SchemaInfo) ([]RouteMapping, error) {
 	if info.Async == nil {
 		return nil, fmt.Errorf("schema %q has no AsyncAPI document", info.Prefix)

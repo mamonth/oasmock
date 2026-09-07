@@ -469,6 +469,7 @@ Then the filtered subscriber receives schedule/consumer/event/push envelopes but
 
 Related spec scenarios: RS.AMG.23, RS.AMG.24, RS.AMG.25, RS.AMG.26, RS.AMG.27
 */
+//nolint:gocyclo // black-box assertion matrix over four envelope kinds
 func TestIntegration_ManageStream_Envelopes(t *testing.T) {
 	t.Parallel()
 	port, stop := startManagementServer(t)

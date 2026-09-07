@@ -57,6 +57,20 @@ func (s *Server) setupRouter() {
 	// Register RPC gateway route if configured
 	if s.rpcHandler != nil {
 		r.Post(s.gatewayPath, s.rpcHandler.ServeHTTP)
+		// Also mount each procedure's own path so a client may invoke a
+		// procedure directly at /rpc/users/123. Routing through chi populates
+		// RouteContext.URLParams from the procedure's brace pattern, so path
+		// parameters resolve without a manual URL fallback (RS.JRP.34).
+		// The gateway itself is already mounted; avoid chi's duplicate-route
+		// panic when a procedure is declared exactly at the gateway path.
+		seen := map[string]bool{s.gatewayPath: true}
+		for _, rm := range s.rpcMappings {
+			if seen[rm.ChiPattern] {
+				continue
+			}
+			seen[rm.ChiPattern] = true
+			r.Post(rm.ChiPattern, s.rpcHandler.ServeHTTP)
+		}
 		slog.Info("Registered RPC gateway", "path", s.gatewayPath, "procedures", len(s.rpcHandler.procedureMap))
 	}
 
