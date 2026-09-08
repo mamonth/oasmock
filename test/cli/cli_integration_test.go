@@ -644,34 +644,11 @@ schemas:
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	// Read output until we see "Mock server started" or timeout
-	outputChan := make(chan string)
-	go func() {
-		var output strings.Builder
-		buf := make([]byte, 1024)
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			n, err := stderrPipe.Read(buf)
-			if n > 0 {
-				output.Write(buf[:n])
-				if strings.Contains(output.String(), "Mock server started") {
-					break
-				}
-			}
-			if err != nil {
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		outputChan <- output.String()
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "port=19999", "config file port not used: %s", output)
-		assert.Contains(t, output, "level=DEBUG", "config file verbose flag not applied: %s", output)
-	case <-time.After(3 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	// Read output until we see startup on the configured port
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started", "port=19999")
+	assert.Contains(t, output, "Mock server started", "mock command not executed: %s", output)
+	assert.Contains(t, output, "port=19999", "config file port not used: %s", output)
+	assert.Contains(t, output, "level=DEBUG", "config file verbose flag not applied: %s", output)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }
@@ -921,38 +898,14 @@ verbose: true`
 	require.NoError(t, err, "failed to get stderr pipe")
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	// Read output until we see "Mock server started" or timeout
-	outputChan := make(chan string)
-	go func() {
-		var output strings.Builder
-		buf := make([]byte, 1024)
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			n, err := stderrPipe.Read(buf)
-			if n > 0 {
-				output.Write(buf[:n])
-				if strings.Contains(output.String(), "Mock server started") {
-					break
-				}
-			}
-			if err != nil {
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		outputChan <- output.String()
-	}()
-	select {
-	case output := <-outputChan:
-		// Should start on configured port
-		assert.Contains(t, output, "port=18888", "config file port not used: %s", output)
-		// Should have verbose logging enabled
-		assert.Contains(t, output, "level=DEBUG", "config file verbose flag not applied: %s", output)
-		// Should indicate schemas loaded (check for route registration messages)
-		// The exact messages depend on implementation, but we can check server started successfully
-	case <-time.After(3 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	// Read output until we see startup on the configured port
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started", "port=18888")
+	// Should start on configured port
+	assert.Contains(t, output, "port=18888", "config file port not used: %s", output)
+	// Should have verbose logging enabled
+	assert.Contains(t, output, "level=DEBUG", "config file verbose flag not applied: %s", output)
+	// Should indicate schemas loaded (check for route registration messages)
+	// The exact messages depend on implementation, but we can check server started successfully
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }
@@ -1020,31 +973,8 @@ operations:
 	require.NoError(t, err)
 	require.NoError(t, cmd.Start(), "failed to start mock command")
 
-	outputChan := make(chan string)
-	go func() {
-		var acc strings.Builder
-		buf := make([]byte, 1024)
-		for {
-			n, err := stderrPipe.Read(buf)
-			if n > 0 {
-				acc.Write(buf[:n])
-				if strings.Contains(acc.String(), "Mock server started") {
-					outputChan <- acc.String()
-					return
-				}
-			}
-			if err != nil {
-				outputChan <- acc.String()
-				return
-			}
-		}
-	}()
-	select {
-	case output := <-outputChan:
-		assert.Contains(t, output, "Mock server started", "mock command did not start with AsyncAPI: %s", output)
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "timeout waiting for mock output")
-	}
+	output := captureUntil(t, stderrPipe, 6*time.Second, "Mock server started")
+	assert.Contains(t, output, "Mock server started", "mock command did not start with AsyncAPI: %s", output)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 }
