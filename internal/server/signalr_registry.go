@@ -105,26 +105,44 @@ func (r *signalRConnRegistry) connections() map[string]*signalRConnection {
 	return out
 }
 
-// connectionMetadata returns the upgrade-time query metadata of a connection
-// (for {$connection.query.*} evaluation); nil when unknown.
-func (r *signalRConnRegistry) connectionMetadata(connID string) map[string][]string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if sc, ok := r.conns[connID]; ok {
-		return sc.query
-	}
-	return nil
+// signalRStreamEntry is one open stream of a hub connection together with the
+// connection's upgrade-time metadata (query/headers/path). Building the entry
+// under a single registry lock keeps the stream + metadata snapshot atomic, so
+// consumers no longer take one lock per metadata field (RS.EXT.27, RS.SHR.26).
+type signalRStreamEntry struct {
+	connectionID string
+	path         string
+	query        map[string][]string
+	headers      map[string][]string
+	stream       map[string]string
 }
 
-// connectionHeaders returns the upgrade-time header metadata of a connection;
-// nil when unknown. Header keys are lower-cased at capture time.
-func (r *signalRConnRegistry) connectionHeaders(connID string) map[string][]string {
+// streamEntriesForChannel returns one signalRStreamEntry per open stream of a
+// channel. The stream map mirrors openStreamsForChannel's record shape
+// (connectionId/invocationId/streamId).
+func (r *signalRConnRegistry) streamEntriesForChannel(channelID string) []signalRStreamEntry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if sc, ok := r.conns[connID]; ok {
-		return sc.headers
+	var out []signalRStreamEntry
+	for _, sc := range r.conns {
+		for invocationID, st := range sc.streams {
+			if st.channelID != channelID {
+				continue
+			}
+			out = append(out, signalRStreamEntry{
+				connectionID: sc.id,
+				path:         sc.path,
+				query:        sc.query,
+				headers:      sc.headers,
+				stream: map[string]string{
+					"connectionId": sc.id,
+					"invocationId": invocationID,
+					"streamId":     st.channelID,
+				},
+			})
+		}
 	}
-	return nil
+	return out
 }
 
 // openStreamsForChannel returns open-stream descriptions for a channel.

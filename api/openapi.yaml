@@ -338,7 +338,7 @@ components:
           properties:
             protocol:
               type: string
-              enum: [http, ws]
+              enum: [http, ws, signalr]
               description: AsyncAPI protocol when targeting an AsyncAPI channel
             channel:
               type: string
@@ -466,8 +466,10 @@ components:
           type: string
           description: Target a specific consumer; omitted broadcasts to all
         payload:
-          type: object
-          description: Message payload, templated with {$state.*}/{$env.*}
+          description: |
+            Any JSON value (object, array, or scalar) delivered verbatim as the
+            channel message / SignalR stream item. Object payloads are templated
+            with {$state.*}/{$env.*}; arrays and scalars pass through untouched.
         delay:
           type: integer
           minimum: 0
@@ -507,6 +509,9 @@ components:
                       type: string
                     streamId:
                       type: string
+              path:
+                type: string
+                description: Concrete SignalR hub upgrade path (including per-account path-parameter values such as an accountId segment); present on signalr consumers, absent on raw ws consumers
   responses:
     InvalidRequest:
       description: The request is malformed, missing required fields, or references an unknown target

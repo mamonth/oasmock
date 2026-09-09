@@ -29,3 +29,7 @@ package-lock.json
 Thumbs.db
 
 coverage_report.md
+
+# Tooling caches / generated artifacts
+.project-graph-cache.json
+scripts/__pycache__/

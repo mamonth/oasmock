@@ -198,6 +198,61 @@ func TestSignalR_UnknownOperationTarget(t *testing.T) {
 	assert.Contains(t, env.Error, "unknown operation target")
 }
 
+const signalRArraySnapshotDoc = `asyncapi: 3.0.0
+info:
+  title: SignalR Hub
+  version: 1.0.0
+x-signalr:
+  path: /arrayhub
+channels:
+  orderDiff:
+    address: orderDiff
+    bindings:
+      ws:
+        method: GET
+    messages:
+      diffMsg:
+        examples:
+          - name: snap
+            payload:
+              - orderId: grid-1
+operations:
+  getDiff:
+    action: send
+    channel:
+      $ref: '#/channels/orderDiff'
+    messages:
+      - $ref: '#/channels/orderDiff/messages/diffMsg'
+`
+
+/*
+Scenario: Array snapshot on stream open
+Given a hub channel whose message payload is a JSON array
+When a client opens a stream on it
+Then the snapshot StreamItem carries the array verbatim as item
+
+Related spec scenarios: RS.SHR.25
+*/
+func TestSignalR_ArraySnapshotOnOpen(t *testing.T) {
+	t.Parallel()
+
+	doc, err := asyncapi.Parse([]byte(signalRArraySnapshotDoc))
+	require.NoError(t, err)
+	schemas := []loader.SchemaInfo{{Kind: loader.KindAsyncAPI, Async: doc, Prefix: ""}}
+	srv, err := New(Config{HistorySize: DefaultHistorySize}, schemas)
+	require.NoError(t, err)
+	ts := httptest.NewServer(srv.router)
+	t.Cleanup(ts.Close)
+
+	conn := dialSignalRHub(t, ts.URL, "/arrayhub")
+	snap := streamInvoke(t, conn, "orderDiff", "s1")
+	var env signalREnvelope
+	require.NoError(t, json.Unmarshal(splitSignalRFrames(snap)[0], &env))
+	assert.Equal(t, signalRTypeStreamItem, env.Type)
+	raw, _ := json.Marshal(env.Item)
+	assert.JSONEq(t, `[{"orderId":"grid-1"}]`, string(raw))
+}
+
 func handshakeSignalR(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"protocol":"json","version":1}`)))
@@ -205,6 +260,43 @@ func handshakeSignalR(t *testing.T, conn *websocket.Conn) {
 	_, _, err := conn.ReadMessage()
 	require.NoError(t, err)
 	_ = conn.SetReadDeadline(time.Time{})
+}
+
+// dialSignalRHub connects a raw-framed SignalR client to a hub path and
+// completes the bare handshake, registering the connection for close.
+func dialSignalRHub(t *testing.T, tsURL, hubPath string) *websocket.Conn {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(tsURL, "http") + hubPath
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	handshakeSignalR(t, conn)
+	return conn
+}
+
+// streamInvoke opens a client-initiated stream on a channel and returns the
+// raw snapshot frame sent in reply.
+func streamInvoke(t *testing.T, conn *websocket.Conn, target, invocationID string) []byte {
+	t.Helper()
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":4,"invocationId":"`+invocationID+`","target":"`+target+`"}`+"\x1e")))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	_ = conn.SetReadDeadline(time.Time{})
+	return msg
+}
+
+// readSignalRFrame reads the next frame and returns the first SignalR message
+// decoded as an envelope.
+func readSignalRFrame(t *testing.T, conn *websocket.Conn) signalREnvelope {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	_ = conn.SetReadDeadline(time.Time{})
+	var env signalREnvelope
+	require.NoError(t, json.Unmarshal(splitSignalRFrames(msg)[0], &env))
+	return env
 }
 
 /*
@@ -297,6 +389,39 @@ func TestSignalR_UnsupportedHandshake(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(hs), `"error"`)
 	assert.True(t, strings.HasSuffix(string(hs), "\x1e"))
+}
+
+/*
+Scenario: Handshake terminated by the record separator is accepted
+Given a SignalR client sending the spec-compliant record-separator-terminated
+handshake frame {"protocol":"json","version":1}\x1e
+When the server processes it
+Then it replies {}\x1e and accepts a subsequent StreamInvocation
+
+Related spec scenarios: RS.SHR.23
+*/
+func TestSignalR_RecordSeparatorHandshake(t *testing.T) {
+	t.Parallel()
+
+	srv := newSignalRServer(t)
+	conn := dialSignalR(t, srv)
+
+	// Spec-compliant handshake framing (RS.SHR.23): JSON terminated by 0x1E.
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"protocol":"json","version":1}`+"\x1e")))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, hs, err := conn.ReadMessage()
+	require.NoError(t, err)
+	assert.Equal(t, "{}\x1e", string(hs))
+
+	// The connection survives the framed handshake: a subsequent
+	// StreamInvocation is answered with a snapshot StreamItem (RS.SHR.23).
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":4,"invocationId":"1","target":"priceFeed"}`+"\x1e")))
+	_, snap, err := conn.ReadMessage()
+	require.NoError(t, err)
+	var env signalREnvelope
+	require.NoError(t, json.Unmarshal(splitSignalRFrames(snap)[0], &env))
+	assert.Equal(t, signalRTypeStreamItem, env.Type)
+	assert.Equal(t, "1", env.InvocationID)
 }
 
 /*

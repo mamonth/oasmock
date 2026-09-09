@@ -141,6 +141,10 @@ type ConsumerInfo struct {
 	Query        map[string][]string
 	Headers      map[string][]string
 	Streams      []map[string]string
+	// Path is the concrete upgrade path of a SignalR connection (including
+	// captured path-parameter values such as a per-account {accountId} segment)
+	// for per-account recipient selection (RS.SHR.26, RS.AMG.32).
+	Path string
 	// Protocol is the consumer transport: "ws" for raw WebSocket consumers or
 	// "signalr" for SignalR connections (design D7).
 	Protocol string

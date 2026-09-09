@@ -118,7 +118,7 @@ Route calls by body field instead of URL path. See [json-rpc.md](./docs/json-rpc
 
 ## Runtime Expressions
 
-Runtime expressions are enclosed in `{$...}` and resolved at request time. Data sources: `{$request.path.param}`, `{$request.query.param}`, `{$request.header.name}`, `{$request.body.field}`, `{$request.cookie.name}`, `{$state.key}`, `{$env.VARIABLE}`, and for async-driven examples `{$event.name}`/`{$event.data}`/`{$event.<field>}` plus per-connection `{$connection.id}`/`{$connection.channel}`/`{$connection.query.<key>}`/`{$connection.header.<key>}`.
+Runtime expressions are enclosed in `{$...}` and resolved at request time. Data sources: `{$request.path.param}`, `{$request.query.param}`, `{$request.header.name}`, `{$request.body.field}`, `{$request.cookie.name}`, `{$state.key}`, `{$env.VARIABLE}`, and for async-driven examples `{$event.name}`/`{$event.data}`/`{$event.<field>}` plus per-connection `{$connection.id}`/`{$connection.channel}`/`{$connection.path}`/`{$connection.query.<key>}`/`{$connection.header.<key>}`.
 
 Modifiers: `\|default:value` (fallback), `\|getByPath:path` (traverse nested objects), `\|toJWT` (stub).
 
@@ -133,8 +133,8 @@ The server exposes a control HTTP API under the `/_mock` prefix. Full schema: [a
   - sync (OpenAPI) targets use `path`; AsyncAPI targets use `channel` with optional `match`/`interval`/`delay` mirroring `x-mock-match`/`x-mock-interval`/`x-mock-delay` for live event-driven or recurring delivery
 - `DELETE /_mock/examples/{exampleId}` — remove a dynamic example and cancel any recurring interval delivery
 - `POST /_mock/events` — fire a named event ad-hoc with `{name, payload, delay, global}` (a POST to the events collection is the fire action; `name` is the `{$event.name}` matched by event-driven examples)
-- `POST /_mock/async/messages` — post a message to channel consumers (immediate/delayed, targeted/broadcast)
-- `GET /_mock/async/consumers` — list connected consumers (`channel` optional, all channels when omitted)
+- `POST /_mock/async/messages` — post a message to channel consumers (immediate/delayed, targeted/broadcast; the payload is any JSON value — object, array, or scalar — delivered verbatim as the channel message / SignalR stream `item`)
+- `GET /_mock/async/consumers` — list connected consumers (`channel` optional, all channels when omitted; SignalR consumer records include the upgrade `path`, enabling per-account targeting on parameterized hub paths)
 - `DELETE /_mock/async/consumers/{connectionId}` — force-disconnect a consumer (`?code=&reason=&abrupt=` query parameters for close control)
 - `GET /_mock/stream` — management WebSocket stream of runtime notifications (event/push/consumer/schedule envelopes, filtered at connect time)
 

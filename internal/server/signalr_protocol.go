@@ -58,8 +58,12 @@ func encodeSignalRMessage(v any) []byte {
 }
 
 // parseSignalRHandshake validates the first-frame handshake. Only the JSON
-// protocol with version 1 is accepted (RS.SHR.14, RS.SHR.15).
+// protocol with version 1 is accepted (RS.SHR.14, RS.SHR.15). A spec-compliant
+// client terminates the handshake JSON with the record separator, while the
+// project's own Go test client sends the bare form; both are accepted by
+// stripping a single trailing 0x1E before parsing (RS.SHR.23).
 func parseSignalRHandshake(data []byte) (string, int, error) {
+	data = bytes.TrimSuffix(data, []byte{recordSeparator})
 	var hs struct {
 		Protocol string `json:"protocol"`
 		Version  int    `json:"version"`

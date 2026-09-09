@@ -58,6 +58,7 @@ For event-driven examples, conditions referencing the connection context become 
 |------------------------------------|------------------------------------------------------|
 | `{$connection.id}`                 | Consumer connection id                               |
 | `{$connection.channel}`            | Channel address the consumer connected to            |
+| `{$connection.path}`               | Concrete upgrade path of a SignalR connection (including captured path-parameter values, e.g. a per-account `{accountId}` segment) |
 | `{$connection.query.<key>}`        | Query parameter captured at upgrade                  |
 | `{$connection.header.<key>}`       | Request header captured at upgrade (lower-cased)     |
 
@@ -220,4 +221,4 @@ Value modifiers can be specified after a `|` sign. Example: `{$request.path.para
 | `{$state.someSavedParam}`              | State data (set previously with `x-mock-set-state`) |
 | `{$env.ENV_VAR}`                       | Runtime environment variables                       |
 | `{$event.name}` / `{$event.data}` / `{$event.<field>}` | Event identity, whole payload, and payload fields (async-driven examples) |
-| `{$connection.id}` / `{$connection.channel}` / `{$connection.query.<key>}` / `{$connection.header.<key>}` | Per-connection recipient matching (event delivery) |
+| `{$connection.id}` / `{$connection.channel}` / `{$connection.path}` / `{$connection.query.<key>}` / `{$connection.header.<key>}` | Per-connection recipient matching (event delivery) |

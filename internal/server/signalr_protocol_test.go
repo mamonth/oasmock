@@ -61,6 +61,23 @@ func TestParseSignalRHandshake_Valid(t *testing.T) {
 }
 
 /*
+Scenario: Handshake terminated by the record separator parses
+Given a handshake payload terminated by the 0x1E record separator
+When parseSignalRHandshake is called
+Then it strips the trailing separator and parses successfully
+
+Related spec scenarios: RS.SHR.23
+*/
+func TestParseSignalRHandshake_RecordSeparator(t *testing.T) {
+	t.Parallel()
+
+	proto, version, err := parseSignalRHandshake([]byte(`{"protocol":"json","version":1}` + "\x1e"))
+	require.NoError(t, err)
+	assert.Equal(t, "json", proto)
+	assert.Equal(t, 1, version)
+}
+
+/*
 Scenario: Rejecting an unsupported SignalR handshake protocol
 Given a handshake requesting messagepack
 When parseSignalRHandshake is called
