@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/mamonth/oasmock/internal/asyncapi"
 	"github.com/mamonth/oasmock/internal/extensions"
 	"github.com/mamonth/oasmock/internal/loader"
 	"github.com/xeipuuv/gojsonschema"
@@ -253,6 +254,14 @@ func (s *Server) resolveExampleTarget(req *addExampleRequest) (*RouteMapping, er
 	if req.Protocol != "" || req.Channel != "" {
 		mapping := s.findAsyncRouteMapping(req.Protocol, req.Channel, req.Method)
 		if mapping == nil {
+			// A SignalR hub channel is deliberately absent from the raw-route
+			// mapping table (design D7), so resolve it directly against the
+			// hubs when the raw-route scan misses (design D3). The requested
+			// protocol must not contradict the hub target: only an explicit
+			// "signalr" (or an omitted protocol) may fall back to a hub channel.
+			mapping = s.hubRouteMapping(req.Protocol, req.Channel)
+		}
+		if mapping == nil {
 			return nil, fmt.Errorf("no matching route found")
 		}
 		if err := rejectNonEventAsyncConditions(mapping, req); err != nil {
@@ -269,6 +278,29 @@ func (s *Server) resolveExampleTarget(req *addExampleRequest) (*RouteMapping, er
 		}
 	}
 	return nil, fmt.Errorf("no matching route found")
+}
+
+// hubRouteMapping builds a hub-backed RouteMapping for an address served by a
+// SignalR hub channel (design D3). It returns nil when the address matches no
+// hub channel or the requested protocol contradicts a hub target (anything
+// other than "signalr" or an omitted protocol).
+func (s *Server) hubRouteMapping(protocol, channel string) *RouteMapping {
+	if protocol != "" && protocol != asyncapi.ProtocolSignalR {
+		return nil
+	}
+	hub, channelID := s.hubMgr.hubChannelForAddress(channel)
+	if hub == nil {
+		return nil
+	}
+	return &RouteMapping{
+		Method:     http.MethodGet,
+		Path:       channel,
+		Pattern:    channel,
+		Prefix:     hub.prefix,
+		ChiPattern: channel,
+		Protocol:   asyncapi.ProtocolSignalR,
+		Messages:   loader.MessageSpecsFromAsync(hub.channels[channelID].Messages),
+	}
 }
 
 // needsRuntimeRegistration reports whether an async target carries a trigger

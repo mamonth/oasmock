@@ -337,6 +337,36 @@ func TestPushEndpoint_TargetedSignalR(t *testing.T) {
 }
 
 /*
+Scenario: Pushing an array payload to an open hub stream
+Given a SignalR consumer with an open stream on a hub channel
+When a management push posts an array payload
+Then the consumer receives it as the StreamItem item verbatim
+
+Related spec scenarios: RS.SHR.24, RS.AMG.31
+*/
+func TestPushEndpoint_SignalRArrayPayload(t *testing.T) {
+	t.Parallel()
+
+	srv := newSignalRPushMgmtServer(t)
+	ts := httptest.NewServer(srv.router)
+	defer ts.Close() //nolint:errcheck
+
+	conn := dialSignalRHub(t, ts.URL, "/hub")
+	_ = streamInvoke(t, conn, "priceFeed", "s1") // open stream, drain snapshot
+
+	body := `{"channel":"/priceFeed","payload":[{"orderId":"grid-1"}]}`
+	post, err := http.Post(ts.URL+"/_mock/async/messages", "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	defer post.Body.Close() //nolint:errcheck
+	require.Equal(t, http.StatusOK, post.StatusCode)
+
+	env := readSignalRFrame(t, conn)
+	assert.Equal(t, signalRTypeStreamItem, env.Type)
+	raw, _ := json.Marshal(env.Item)
+	assert.JSONEq(t, `[{"orderId":"grid-1"}]`, string(raw))
+}
+
+/*
 Scenario: Abrupt disconnect aborts without a close frame
 Given an active consumer and a disconnect request with abrupt=true
 When the disconnect endpoint is invoked

@@ -59,6 +59,10 @@ type signalRConnection struct {
 	// evaluation (RS.EXT.27).
 	query   map[string][]string
 	headers map[string][]string
+	// path is the concrete upgrade path (including any path-parameter values,
+	// e.g. a per-account {accountId} segment) for per-account addressing
+	// (RS.SHR.26).
+	path string
 }
 
 // signalRStream is an open client-initiated stream over a channel.
@@ -204,6 +208,7 @@ func (h *signalRHub) serveUpgrade(w http.ResponseWriter, r *http.Request) {
 		streams: make(map[string]*signalRStream),
 		query:   r.URL.Query(),
 		headers: lowerHeaderKeys(r.Header),
+		path:    r.URL.Path,
 	}
 	h.conns.register(sc)
 
@@ -213,6 +218,7 @@ func (h *signalRHub) serveUpgrade(w http.ResponseWriter, r *http.Request) {
 		Channel:      channel,
 		Query:        sc.query,
 		Headers:      sc.headers,
+		Path:         sc.path,
 		Protocol:     asyncapi.ProtocolSignalR,
 	}
 	if h.hooks.OnConnect != nil {

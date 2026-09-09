@@ -184,6 +184,10 @@ type ConnectionSource struct {
 	Channel string
 	Query   map[string][]string
 	Headers map[string][]string
+	// Path is the concrete upgrade path of a SignalR connection, including
+	// any path-parameter values (e.g. a per-account {accountId} segment), for
+	// per-account recipient matching (RS.SHR.26).
+	Path string
 }
 
 func (c *ConnectionSource) Get(path string) (any, bool) {
@@ -202,6 +206,11 @@ func (c *ConnectionSource) Get(path string) (any, bool) {
 			return nil, false
 		}
 		return c.Channel, true
+	case "path":
+		if c.Path == "" {
+			return nil, false
+		}
+		return c.Path, true
 	case "query":
 		return multiValueLookup(c.Query, parts[1:])
 	case "header":

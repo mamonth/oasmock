@@ -155,8 +155,8 @@ The mock server SHALL partition `x-mock-match` at delivery time: conditions refe
 - **THEN** the server delivers the message to that single consumer only
 
 #### Scenario RS.EXT.27: Connection context exposure
-- **WHEN** a condition references `{$connection.id}`, `{$connection.channel}`, `{$connection.query.<key>}`, or `{$connection.header.<key>}`
-- **THEN** the values resolve from the consumer's connection id, channel address, and metadata captured at upgrade
+- **WHEN** a condition references `{$connection.id}`, `{$connection.channel}`, `{$connection.path}`, `{$connection.query.<key>}`, or `{$connection.header.<key>}`
+- **THEN** the values resolve from the consumer's connection id, channel address, upgrade path, and metadata captured at upgrade
 
 ### Requirement: Timing extensions x-mock-interval and x-mock-delay
 The mock server SHALL support `x-mock-interval` (positive integer milliseconds) on an async example to emit it repeatedly at that cadence, and `x-mock-delay` (integer milliseconds, default 0) to delay emission after an event fire. Neither is an event identity; `x-mock-interval` marks a periodically driven example. Timing values SHALL be integral milliseconds: a fractional value SHALL be rejected at load rather than silently truncated, and a periodically driven example SHALL honor `x-mock-skip` like every other example.

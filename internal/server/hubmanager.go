@@ -14,11 +14,6 @@ type hubManager struct {
 	ws   *wsProtocolAdapter
 }
 
-// hubForAddress finds the SignalR hub owning a channel address.
-func (s *Server) hubForAddress(address string) *signalRHub {
-	return s.hubMgr.hubForAddress(address)
-}
-
 // asyncAddressWithPrefix applies a schema prefix to a channel address.
 func asyncAddressWithPrefix(prefix, address string) string {
 	addr := "/" + strings.Trim(address, "/")
@@ -114,21 +109,49 @@ func (m *hubManager) Candidates(address string) []ConsumerInfo {
 	}
 	if hub, channelID := m.hubChannelForAddress(address); hub != nil {
 		seen := make(map[string]int) // connectionID -> index in out
-		for _, st := range hub.conns.openStreamsForChannel(channelID) {
-			connID := st["connectionId"]
+		for _, entry := range hub.conns.streamEntriesForChannel(channelID) {
+			connID := entry.connectionID
 			if idx, ok := seen[connID]; ok {
-				out[idx].Streams = append(out[idx].Streams, st)
+				out[idx].Streams = append(out[idx].Streams, entry.stream)
 				continue
 			}
 			seen[connID] = len(out)
 			out = append(out, ConsumerInfo{
 				ConnectionID: connID,
 				Channel:      address,
-				Query:        hub.conns.connectionMetadata(connID),
-				Headers:      hub.conns.connectionHeaders(connID),
-				Streams:      []map[string]string{st},
+				Query:        entry.query,
+				Headers:      entry.headers,
+				Path:         entry.path,
+				Streams:      []map[string]string{entry.stream},
 				Protocol:     asyncapi.ProtocolSignalR,
 			})
+		}
+	}
+	return out
+}
+
+// signalRConsumerRecord is one open-stream consumer of a hub channel's
+// fully-prefixed address. It is the wire-row source for the management
+// consumers listing.
+type signalRConsumerRecord struct {
+	Channel string
+	signalRStreamEntry
+}
+
+// consumerRecords lists one record per open hub-channel stream, across all hub
+// channels when address is empty, or restricted to one fully-prefixed channel
+// address otherwise (RS.AMG.8, RS.AMG.22).
+func (m *hubManager) consumerRecords(address string) []signalRConsumerRecord {
+	var out []signalRConsumerRecord
+	for _, hub := range m.hubs {
+		for channelID, ch := range hub.channels {
+			addr := asyncAddressWithPrefix(hub.prefix, ch.Address)
+			if address != "" && addr != address {
+				continue
+			}
+			for _, entry := range hub.conns.streamEntriesForChannel(channelID) {
+				out = append(out, signalRConsumerRecord{Channel: addr, signalRStreamEntry: entry})
+			}
 		}
 	}
 	return out

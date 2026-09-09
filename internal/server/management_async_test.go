@@ -14,6 +14,88 @@ import (
 )
 
 /*
+Scenario: Decoding an async message request accepts an array payload
+Given a request body whose payload is a JSON array
+When decodeAsyncMessage is called
+Then it decodes successfully without rejecting the array
+
+Related spec scenarios: RS.AMG.31
+*/
+func TestDecodeAsyncMessage_ArrayPayload(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "/_mock/async/messages",
+		strings.NewReader(`{"channel":"/alerts","payload":[{"orderId":"grid-1"}]}`))
+	decoded, err := decodeAsyncMessage(req)
+	require.NoError(t, err)
+	assert.Equal(t, "/alerts", decoded.Channel)
+	raw, err := json.Marshal(decoded.Payload)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"orderId":"grid-1"}]`, string(raw))
+}
+
+/*
+Scenario: Array push payloads are not runtime-evaluated
+Given an array payload whose elements carry expression-like strings
+When evaluatePushPayload is called
+Then the array is passed through verbatim (expressions address object fields)
+
+Related spec scenarios: RS.AMG.31, RS.SHR.24
+*/
+func TestEvaluatePushPayload_ArrayVerbatim(t *testing.T) {
+	// Not parallel: t.Setenv mutates the process environment, which is unsafe
+	// to share across parallel tests.
+	t.Setenv("OASMOCK_TEST_VAL", "resolved")
+	srv := newAsyncMgmtServer(t)
+
+	got, err := srv.evaluatePushPayload([]any{map[string]any{"msg": "{$env.OASMOCK_TEST_VAL}"}}, "/alerts")
+	require.NoError(t, err)
+	raw, err := json.Marshal(got)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"msg":"{$env.OASMOCK_TEST_VAL}"}]`, string(raw))
+}
+
+/*
+Scenario: Scalar push payloads are not runtime-evaluated
+Given a scalar payload that is a single expression
+When evaluatePushPayload is called
+Then the scalar is passed through verbatim
+
+Related spec scenarios: RS.AMG.31, RS.SHR.24
+*/
+func TestEvaluatePushPayload_ScalarVerbatim(t *testing.T) {
+	// Not parallel: t.Setenv mutates the process environment, which is unsafe
+	// to share across parallel tests.
+	t.Setenv("OASMOCK_TEST_VAL", "resolved")
+	srv := newAsyncMgmtServer(t)
+
+	got, err := srv.evaluatePushPayload("{$env.OASMOCK_TEST_VAL}", "/alerts")
+	require.NoError(t, err)
+	assert.Equal(t, "{$env.OASMOCK_TEST_VAL}", got)
+}
+
+/*
+Scenario: Object push payloads are runtime-evaluated
+Given an object payload whose fields carry runtime expressions
+When evaluatePushPayload is called
+Then the object fields are evaluated against the environment
+
+Related spec scenarios: RS.AMG.10
+*/
+func TestEvaluatePushPayload_ObjectEvaluated(t *testing.T) {
+	// Not parallel: t.Setenv mutates the process environment, which is unsafe
+	// to share across parallel tests.
+	t.Setenv("OASMOCK_TEST_VAL", "resolved")
+	srv := newAsyncMgmtServer(t)
+
+	got, err := srv.evaluatePushPayload(map[string]any{"msg": "{$env.OASMOCK_TEST_VAL}"}, "/alerts")
+	require.NoError(t, err)
+	raw, err := json.Marshal(got)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"msg":"resolved"}`, string(raw))
+}
+
+/*
 Scenario: Pushing a message to channel consumers immediately
 Given a management push request without a delay and a connected consumer
 When the push endpoint is invoked

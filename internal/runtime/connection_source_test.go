@@ -9,12 +9,13 @@ import (
 
 /*
 Scenario: Connection context exposure for per-connection matching
-Given a ConnectionSource with id, channel and upgrade-time metadata
+Given a ConnectionSource with id, channel, upgrade path and upgrade-time metadata
 When the source is queried by path
-Then {$connection.id}, {$connection.channel}, {$connection.query.<key>} and
-{$connection.header.<key>} resolve from the connection context
+Then {$connection.id}, {$connection.channel}, {$connection.path},
+{$connection.query.<key>} and {$connection.header.<key>} resolve from the
+connection context
 
-Related spec scenarios: RS.EXT.27
+Related spec scenarios: RS.EXT.27, RS.SHR.26
 */
 func TestConnectionSource_Get(t *testing.T) {
 	t.Parallel()
@@ -24,6 +25,7 @@ func TestConnectionSource_Get(t *testing.T) {
 		Channel: "/alerts",
 		Query:   map[string][]string{"region": {"eu"}, "mode": {"a", "b"}},
 		Headers: map[string][]string{"x-tenant": {"acme"}, "x-org": {"acme"}, "x-echo": {"one", "two"}},
+		Path:    "/frontoffice/ws/account/qa-A",
 	}
 
 	tests := []struct {
@@ -34,6 +36,7 @@ func TestConnectionSource_Get(t *testing.T) {
 	}{
 		{name: "connection id", path: "id", want: "conn-1", ok: true},
 		{name: "connection channel", path: "channel", want: "/alerts", ok: true},
+		{name: "connection path", path: "path", want: "/frontoffice/ws/account/qa-A", ok: true},
 		{name: "query single value", path: "query.region", want: "eu", ok: true},
 		{name: "query multiple values", path: "query.mode", want: []string{"a", "b"}, ok: true},
 		{name: "header single value", path: "header.x-tenant", want: "acme", ok: true},

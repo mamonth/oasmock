@@ -14,10 +14,13 @@ import (
 
 // asyncMessageRequest is the payload of POST /_mock/async/messages (RS.AMG.1-7, RS.AMG.10-11).
 type asyncMessageRequest struct {
-	Channel      string         `json:"channel"`
-	ConnectionID string         `json:"connectionId"`
-	Payload      map[string]any `json:"payload"`
-	Delay        int            `json:"delay"`
+	Channel      string `json:"channel"`
+	ConnectionID string `json:"connectionId"`
+	// Payload is any JSON value — object, array, or scalar (RS.AMG.31,
+	// RS.SHR.24). Arrays and scalars are delivered verbatim; only objects
+	// carry object-field runtime expressions (design D2).
+	Payload any `json:"payload"`
+	Delay   int `json:"delay"`
 }
 
 // handleAsyncMessage pushes a message to channel consumers (immediate or
@@ -79,13 +82,19 @@ func (s *Server) handleAsyncMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 // evaluatePushPayload evaluates runtime expressions in a pushed payload using
-// the channel's schema namespace and the environment (RS.AMG.10-11).
-func (s *Server) evaluatePushPayload(payload map[string]any, channel string) (any, error) {
+// the channel's schema namespace and the environment (RS.AMG.10-11). It
+// applies only to object payloads: arrays and scalars carry no object-field
+// expressions and are delivered verbatim (design D2, RS.SHR.24).
+func (s *Server) evaluatePushPayload(payload any, channel string) (any, error) {
+	obj, ok := payload.(map[string]any)
+	if !ok {
+		return payload, nil
+	}
 	prefix := s.prefixForChannel(channel)
 	evaluator := runtime.NewEvaluator()
 	evaluator.AddSource(runtime.SourceState, s.newStateSource(prefix))
 	evaluator.AddSource(runtime.SourceEnv, s.newEnvSource())
-	return s.evaluateValue(payload, evaluator)
+	return s.evaluateValue(obj, evaluator)
 }
 
 // prefixForChannel finds the schema prefix owning a channel address.
@@ -156,21 +165,9 @@ func (s *Server) pushToChannel(channel, connectionID string, payload []byte) {
 	s.hubMgr.WSBroadcast(channel, payload)
 }
 
-// matchingHubChannel finds the channel ID within a hub serving the address.
-func matchingHubChannel(hub *signalRHub, address string) string {
-	for id, ch := range hub.channels {
-		if asyncAddressWithPrefix(hub.prefix, ch.Address) == address {
-			return id
-		}
-	}
-	return ""
-}
-
 // handleAsyncConsumers lists active consumers per channel (RS.AMG.8-9) or
 // across all channels when the channel filter is omitted (RS.AMG.22). It
-// branches on the ws/SignalR registries and the channel scope.
-//
-//nolint:gocyclo // ws registry + SignalR hub union branches
+// branches on the ws registry and the hub consumer records.
 func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 	channel := r.URL.Query().Get("channel")
 	type consumerInfo struct {
@@ -178,6 +175,7 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 		Channel      string              `json:"channel"`
 		Protocol     string              `json:"protocol"`
 		Streams      []map[string]string `json:"streams,omitempty"`
+		Path         string              `json:"path,omitempty"`
 	}
 	consumers := []consumerInfo{}
 
@@ -192,32 +190,14 @@ func (s *Server) handleAsyncConsumers(w http.ResponseWriter, r *http.Request) {
 			consumers = append(consumers, consumerInfo{ConnectionID: ws.id, Channel: ws.channel, Protocol: asyncapi.ProtocolWS})
 		}
 	}
-	if channel == "" {
-		// Flat union across every hub channel's open streams (RS.AMG.22).
-		for _, hub := range s.hubMgr.hubs {
-			for channelID := range hub.channels {
-				address := asyncAddressWithPrefix(hub.prefix, hub.channels[channelID].Address)
-				for _, st := range hub.conns.openStreamsForChannel(channelID) {
-					consumers = append(consumers, consumerInfo{
-						ConnectionID: st["connectionId"],
-						Channel:      address,
-						Protocol:     asyncapi.ProtocolSignalR,
-						Streams:      []map[string]string{st},
-					})
-				}
-			}
-		}
-	} else if hub := s.hubForAddress(channel); hub != nil {
-		if id := matchingHubChannel(hub, channel); id != "" {
-			for _, st := range hub.conns.openStreamsForChannel(id) {
-				consumers = append(consumers, consumerInfo{
-					ConnectionID: st["connectionId"],
-					Channel:      channel,
-					Protocol:     asyncapi.ProtocolSignalR,
-					Streams:      []map[string]string{st},
-				})
-			}
-		}
+	for _, rec := range s.hubMgr.consumerRecords(channel) {
+		consumers = append(consumers, consumerInfo{
+			ConnectionID: rec.connectionID,
+			Channel:      rec.Channel,
+			Protocol:     asyncapi.ProtocolSignalR,
+			Streams:      []map[string]string{rec.stream},
+			Path:         rec.path,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"consumers": consumers})

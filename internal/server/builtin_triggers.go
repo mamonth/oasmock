@@ -85,5 +85,6 @@ func connectionSourceFromInfo(info ConsumerInfo) *runtime.ConnectionSource {
 		Channel: info.Channel,
 		Query:   info.Query,
 		Headers: info.Headers,
+		Path:    info.Path,
 	}
 }
