@@ -28,6 +28,9 @@ runs:
       shell: bash
       run: |
         cert_dir="$(mktemp -d)"
+        # mktemp creates a 0700 directory; the container runs as UID 65532 and
+        # must be able to traverse it before it can read the certificate pair.
+        chmod 755 "$cert_dir"
         cleanup() {
           docker rm -f oasmock-smoke >/dev/null 2>&1 || true
           rm -rf "$cert_dir"
@@ -37,7 +40,8 @@ runs:
         openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
           -keyout "$cert_dir/key.pem" -out "$cert_dir/cert.pem" \
           -subj "/CN=localhost" >/dev/null 2>&1
-        # The container runs as UID 65532; keep the mounted pair readable.
+        # The container runs as UID 65532; the directory must be traversable
+        # (755 above) and the mounted pair readable.
         chmod 644 "$cert_dir/cert.pem" "$cert_dir/key.pem"
 
         docker run -d --name oasmock-smoke -p 19191:19191 -p 8443:8443 \
