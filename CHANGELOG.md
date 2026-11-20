@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Optional HTTPS listener served alongside plain HTTP, configured with `--tls-cert`, `--tls-key`, `--tls-port` (default `8443`), `OASMOCK_TLS_*` environment variables, or flat `tls_cert`/`tls_key`/`tls_port` config keys; both listeners share routes, state, history, `wss://` channels and SignalR hubs, and TLS 1.3 is negotiated when available (TLS 1.2 minimum). TLS certificate/key loading failures exit with the new code `5`.
 - Protocol-neutral async management prefix `/_mock/async/{push,consumers,disconnect}`
 - Spectral-based CI validation for both management API specs (`api/openapi.yaml` sync REST + `api/asyncapi.yaml` async stream)
 - Unified example injection: `POST /_mock/examples` gains `match`/`interval`/`delay` for AsyncAPI targets (runtime mirror of `x-mock-match`/`x-mock-interval`/`x-mock-delay`), with strict context-aware validation, plus `DELETE /_mock/examples/{exampleId}` to remove and cancel recurrence

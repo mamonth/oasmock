@@ -3,6 +3,7 @@ package cli_test
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/mamonth/oasmock/test/_shared/binhelper"
 	"github.com/mamonth/oasmock/test/_shared/clihelper"
+	"github.com/mamonth/oasmock/test/_shared/tlshelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1023,4 +1026,258 @@ operations:
 	exitErr, ok := err.(*exec.ExitError)
 	require.True(t, ok)
 	assert.Equal(t, 3, exitErr.ExitCode())
+}
+
+/*
+Scenario: Serving HTTP and HTTPS from the CLI
+Given the oasmock binary, a test schema, and a self-signed certificate pair
+When the mock command starts with --tls-cert, --tls-key and an ephemeral --tls-port
+Then both listeners serve requests, the management API works over HTTPS, and both actual ports are reported
+
+Related spec scenarios: RS.TLS.1, RS.TLS.2, RS.CLI.33, RS.CLI.36, RS.CLI.44
+*/
+func TestCLITLSServesHTTPAndHTTPS(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	certFile, keyFile := tlshelper.GenerateSelfSigned(t)
+	builder := clihelper.Cmd(t).
+		SetSchema("../../test/_shared/resources/test.yaml", "").
+		SetTLSCert(certFile).
+		SetTLSKey(keyFile).
+		SetTLSPort(0)
+	cmd, _, httpPort := builder.Run()
+	defer clihelper.StopServer(t, cmd)
+
+	tlsPort := builder.TLSPort()
+	require.NotZero(t, tlsPort, "ephemeral TLS port should be reported")
+	assert.NotEqual(t, httpPort, tlsPort, "HTTP and TLS ports should differ")
+	require.True(t, clihelper.WaitForServer(t, httpPort, 2*time.Second), "HTTP listener did not start")
+	require.True(t, clihelper.WaitForServer(t, tlsPort, 2*time.Second), "TLS listener did not start")
+
+	httpResp, err := http.Get(fmt.Sprintf("http://localhost:%d/users", httpPort))
+	require.NoError(t, err)
+	defer httpResp.Body.Close() //nolint:errcheck
+	assert.Equal(t, http.StatusOK, httpResp.StatusCode)
+
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlshelper.ClientConfig()}}
+	defer client.CloseIdleConnections()
+	tlsResp, err := client.Get(fmt.Sprintf("https://localhost:%d/users", tlsPort))
+	require.NoError(t, err)
+	defer tlsResp.Body.Close() //nolint:errcheck
+	assert.Equal(t, http.StatusOK, tlsResp.StatusCode)
+	body, err := io.ReadAll(tlsResp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "Alice")
+
+	mgmtResp, err := client.Get(fmt.Sprintf("https://localhost:%d/_mock/requests", tlsPort))
+	require.NoError(t, err)
+	defer mgmtResp.Body.Close() //nolint:errcheck
+	assert.Equal(t, http.StatusOK, mgmtResp.StatusCode)
+}
+
+/*
+Scenario: Binding a custom TLS port from the CLI
+Given the oasmock binary, a test schema, a self-signed certificate pair, and a free custom TLS port
+When the mock command starts with --tls-port set to that port
+Then the HTTPS listener binds the requested port and serves requests there
+
+Related spec scenarios: RS.CLI.34
+*/
+func TestCLITLSCustomTLSPort(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	tlsPort := clihelper.FindFreePort(t)
+	certFile, keyFile := tlshelper.GenerateSelfSigned(t)
+	builder := clihelper.Cmd(t).
+		SetSchema("../../test/_shared/resources/test.yaml", "").
+		SetTLSCert(certFile).
+		SetTLSKey(keyFile).
+		SetTLSPort(tlsPort)
+	cmd, _, httpPort := builder.Run()
+	defer clihelper.StopServer(t, cmd)
+
+	assert.Equal(t, tlsPort, builder.TLSPort())
+	assert.NotEqual(t, httpPort, tlsPort, "HTTP and TLS ports should differ")
+	require.True(t, clihelper.WaitForServer(t, tlsPort, 2*time.Second), "TLS listener did not start")
+
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlshelper.ClientConfig()}}
+	defer client.CloseIdleConnections()
+	resp, err := client.Get(fmt.Sprintf("https://localhost:%d/users", tlsPort))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+/*
+Scenario: Upgrading a secure WebSocket from the CLI
+Given the oasmock binary, an AsyncAPI WebSocket channel, and a self-signed certificate pair
+When the mock command serves TLS and a client connects with wss://
+Then the upgrade succeeds and the channel message is delivered
+
+Related spec scenarios: RS.TLS.10
+*/
+func TestCLITLSSecureWebSocket(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "asyncapi.yaml")
+	require.NoError(t, os.WriteFile(schemaPath, []byte(`asyncapi: 3.0.0
+info:
+  title: Alerts
+  version: 1.0.0
+channels:
+  alerts:
+    address: /alerts
+    bindings:
+      ws:
+        method: GET
+    messages:
+      alertMsg:
+        examples:
+          - name: snap
+            payload:
+              level: info
+              msg: hello-wss
+operations:
+  receiveAlerts:
+    action: receive
+    channel:
+      $ref: '#/channels/alerts'
+`), 0644))
+
+	certFile, keyFile := tlshelper.GenerateSelfSigned(t)
+	builder := clihelper.Cmd(t).
+		SetSchema(schemaPath, "").
+		SetTLSCert(certFile).
+		SetTLSKey(keyFile).
+		SetTLSPort(0)
+	cmd, _, _ := builder.Run()
+	defer clihelper.StopServer(t, cmd)
+
+	tlsPort := builder.TLSPort()
+	require.NotZero(t, tlsPort, "ephemeral TLS port should be reported")
+	require.True(t, clihelper.WaitForServer(t, tlsPort, 2*time.Second), "TLS listener did not start")
+
+	dialer := websocket.Dialer{TLSClientConfig: tlshelper.ClientConfig()}
+	conn, _, err := dialer.Dial(fmt.Sprintf("wss://localhost:%d/alerts", tlsPort), nil)
+	require.NoError(t, err)
+	defer conn.Close() //nolint:errcheck
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(3*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	assert.Contains(t, string(msg), "hello-wss")
+}
+
+/*
+Scenario: Gracefully shutting down both CLI listeners
+Given the oasmock binary serving HTTP and HTTPS
+When the process receives SIGTERM
+Then it exits and both listeners stop accepting connections
+
+Related spec scenarios: RS.TLS.11
+*/
+func TestCLITLSGracefulShutdown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	certFile, keyFile := tlshelper.GenerateSelfSigned(t)
+	builder := clihelper.Cmd(t).
+		SetSchema("../../test/_shared/resources/test.yaml", "").
+		SetTLSCert(certFile).
+		SetTLSKey(keyFile).
+		SetTLSPort(0)
+	cmd, errCh, httpPort := builder.Run()
+	defer clihelper.StopServer(t, cmd)
+
+	tlsPort := builder.TLSPort()
+	require.NotZero(t, tlsPort)
+	require.True(t, clihelper.WaitForServer(t, httpPort, 2*time.Second))
+	require.True(t, clihelper.WaitForServer(t, tlsPort, 2*time.Second))
+
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+	select {
+	case err := <-errCh:
+		assert.NoError(t, err, "process should exit cleanly after SIGTERM")
+	case <-time.After(5 * time.Second):
+		t.Fatal("process did not exit after SIGTERM")
+	}
+
+	for _, port := range []int{httpPort, tlsPort} {
+		_, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 100*time.Millisecond)
+		assert.Error(t, err, "port %d should stop accepting connections", port)
+	}
+}
+
+/*
+Scenario: Rejecting invalid TLS configuration from the CLI
+Given the oasmock binary and invalid TLS combinations
+When the mock command starts
+Then it exits with the documented code for each failure
+
+Related spec scenarios: RS.CLI.39, RS.CLI.40, RS.CLI.42, RS.CLI.43
+*/
+func TestCLITLSErrors(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	certFile, keyFile := tlshelper.GenerateSelfSigned(t)
+	_, otherKey := tlshelper.GenerateSelfSigned(t)
+
+	t.Run("incomplete certificate pair", func(t *testing.T) {
+		t.Parallel()
+		code := runCLIExitCode(t, "mock", "--from", "../../test/_shared/resources/test.yaml",
+			"--port", "0", "--tls-cert", certFile)
+		assert.Equal(t, 2, code)
+	})
+
+	t.Run("TLS port without certificate pair", func(t *testing.T) {
+		t.Parallel()
+		code := runCLIExitCode(t, "mock", "--from", "../../test/_shared/resources/test.yaml",
+			"--port", "0", "--tls-port", "0")
+		assert.Equal(t, 2, code)
+	})
+
+	t.Run("mismatched certificate and key", func(t *testing.T) {
+		t.Parallel()
+		code := runCLIExitCode(t, "mock", "--from", "../../test/_shared/resources/test.yaml",
+			"--port", "0", "--tls-cert", certFile, "--tls-key", otherKey, "--tls-port", "0")
+		assert.Equal(t, 5, code)
+	})
+
+	t.Run("occupied TLS port", func(t *testing.T) {
+		t.Parallel()
+		ln, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+		defer ln.Close() //nolint:errcheck
+		port := ln.Addr().(*net.TCPAddr).Port
+		code := runCLIExitCode(t, "mock", "--from", "../../test/_shared/resources/test.yaml",
+			"--port", "0", "--tls-cert", certFile, "--tls-key", keyFile,
+			"--tls-port", strconv.Itoa(port))
+		assert.Equal(t, 4, code)
+	})
+}
+
+func runCLIExitCode(t *testing.T, args ...string) int {
+	t.Helper()
+	cmd := exec.Command(binaryPath(t), args...)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return 0
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok, "expected exit error, got %v (output: %s)", err, output)
+	return exitErr.ExitCode()
 }

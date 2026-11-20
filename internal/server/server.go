@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -33,6 +34,7 @@ type Config struct {
 	EnableCORS       bool
 	HistorySize      int
 	EnableControlAPI bool
+	TLS              *TLSConfig
 }
 
 // Server represents the mock HTTP server.
@@ -40,6 +42,7 @@ type Server struct {
 	config           Config
 	router           *chi.Mux
 	httpServer       *http.Server
+	tlsServer        *http.Server
 	httpMu           sync.Mutex
 	shutdownOnce     sync.Once
 	shutdownResult   error
@@ -256,13 +259,38 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.eventDriver.shutdown()
 	}
 	s.httpMu.Lock()
-	hs := s.httpServer
+	hs, ts := s.httpServer, s.tlsServer
 	s.httpMu.Unlock()
-	if hs == nil {
+	if hs == nil && ts == nil {
 		return nil
 	}
 	s.shutdownOnce.Do(func() {
-		s.shutdownResult = hs.Shutdown(ctx)
+		s.shutdownResult = shutdownHTTPServers(ctx, hs, ts)
 	})
 	return s.shutdownResult
+}
+
+// shutdownHTTPServers stops all listeners before waiting for in-flight requests
+// on any of them. Shutting the servers concurrently keeps a slow HTTP drain
+// from leaving the TLS listener accepting new connections (RS.TLS.11).
+func shutdownHTTPServers(ctx context.Context, servers ...*http.Server) error {
+	errs := make(chan error, len(servers))
+	active := 0
+	for _, srv := range servers {
+		if srv == nil {
+			continue
+		}
+		active++
+		go func(srv *http.Server) {
+			errs <- srv.Shutdown(ctx)
+		}(srv)
+	}
+	if active == 0 {
+		return nil
+	}
+	joined := make([]error, 0, active)
+	for range active {
+		joined = append(joined, <-errs)
+	}
+	return errors.Join(joined...)
 }

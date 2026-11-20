@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -414,4 +415,251 @@ func TestConfigPrecedence(t *testing.T) {
 		port := viper.GetInt("port")
 		assert.Equal(t, 6060, port, "environment variable should override default")
 	})
+}
+
+/*
+Scenario: Creating certificate error with CLI error code
+Given a format string and arguments
+When certificateError is called
+Then it returns a cliError with code 5 and formatted message
+
+Related spec scenarios: RS.CLI.42
+*/
+func TestCertificateError(t *testing.T) {
+	t.Parallel()
+
+	err := certificateError("certificate %s", "invalid")
+	require.NotNil(t, err, "certificateError returned nil")
+	assert.Equal(t, "certificate invalid", err.Error(), "certificateError error message")
+	cliErr, ok := err.(*cliError)
+	require.True(t, ok, "certificateError did not return cliError")
+	assert.Equal(t, 5, cliErr.code, "cliError.code mismatch")
+}
+
+/*
+Scenario: Validating TLS configuration combinations
+Given TLS certificate, key and port values
+When validateTLSOptions is called
+Then incomplete pairs, an explicit port without a pair, equal ports and out-of-range ports are rejected while valid and ephemeral ports are accepted
+
+Related spec scenarios: RS.CLI.33, RS.CLI.34, RS.CLI.35, RS.CLI.36, RS.CLI.39, RS.CLI.40, RS.CLI.41
+*/
+func TestTLSConfigValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		tls      tlsOptions
+		httpPort int
+		wantErr  bool
+	}{
+		{
+			name:     "valid certificate pair with default TLS port",
+			tls:      tlsOptions{cert: "cert.pem", key: "key.pem", port: defaultTLSPort},
+			httpPort: defaultPort,
+		},
+		{
+			name:     "valid certificate pair with custom TLS port",
+			tls:      tlsOptions{cert: "cert.pem", key: "key.pem", port: 9443},
+			httpPort: defaultPort,
+		},
+		{
+			name:     "valid certificate pair with ephemeral TLS port",
+			tls:      tlsOptions{cert: "cert.pem", key: "key.pem", port: 0, portSet: true},
+			httpPort: defaultPort,
+		},
+		{
+			name:     "certificate without key",
+			tls:      tlsOptions{cert: "cert.pem", port: defaultTLSPort},
+			httpPort: defaultPort,
+			wantErr:  true,
+		},
+		{
+			name:     "key without certificate",
+			tls:      tlsOptions{key: "key.pem", port: defaultTLSPort},
+			httpPort: defaultPort,
+			wantErr:  true,
+		},
+		{
+			name:     "explicit TLS port without certificate pair",
+			tls:      tlsOptions{port: 9443, portSet: true},
+			httpPort: defaultPort,
+			wantErr:  true,
+		},
+		{
+			name:     "TLS port equals HTTP port",
+			tls:      tlsOptions{cert: "cert.pem", key: "key.pem", port: 8080},
+			httpPort: 8080,
+			wantErr:  true,
+		},
+		{
+			name:     "TLS port below range",
+			tls:      tlsOptions{cert: "cert.pem", key: "key.pem", port: -1, portSet: true},
+			httpPort: defaultPort,
+			wantErr:  true,
+		},
+		{
+			name:     "TLS port above range",
+			tls:      tlsOptions{cert: "cert.pem", key: "key.pem", port: 65536, portSet: true},
+			httpPort: defaultPort,
+			wantErr:  true,
+		},
+		{
+			name:     "TLS disabled without configuration",
+			tls:      tlsOptions{port: defaultTLSPort},
+			httpPort: defaultPort,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateTLSOptions(tt.tls, tt.httpPort)
+			if tt.wantErr {
+				require.Error(t, err)
+				cliErr, ok := err.(*cliError)
+				require.True(t, ok, "error should be cliError")
+				assert.Equal(t, 2, cliErr.code)
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+/*
+Scenario: Detecting explicitly configured TLS port
+Given viper configuration, environment variables and CLI flags
+When tlsPortExplicit is called
+Then only a flag, environment variable, or configuration-file key marks the port as explicitly set
+
+Related spec scenarios: RS.CLI.37, RS.CLI.38
+*/
+func TestTLSPortExplicit(t *testing.T) {
+	unsetTLSEnv(t)
+
+	t.Run("no source", func(t *testing.T) {
+		viper.Reset()
+		cmd := newTLSFlagCmd()
+		assert.False(t, tlsPortExplicit(cmd))
+	})
+
+	t.Run("configuration file", func(t *testing.T) {
+		viper.Reset()
+		viper.SetConfigType("yaml")
+		require.NoError(t, viper.ReadConfig(bytes.NewBufferString("tls_port: 9443")))
+		assert.True(t, tlsPortExplicit(newTLSFlagCmd()))
+	})
+
+	t.Run("environment variable", func(t *testing.T) {
+		viper.Reset()
+		viper.SetEnvPrefix("OASMOCK")
+		viper.AutomaticEnv()
+		t.Setenv("OASMOCK_TLS_PORT", "9443")
+		assert.True(t, tlsPortExplicit(newTLSFlagCmd()))
+	})
+
+	t.Run("command-line flag", func(t *testing.T) {
+		viper.Reset()
+		cmd := newTLSFlagCmd()
+		require.NoError(t, cmd.Flags().Set("tls-port", "9443"))
+		assert.True(t, tlsPortExplicit(cmd))
+	})
+}
+
+/*
+Scenario: Resolving TLS configuration precedence
+Given TLS values in the configuration file, environment and CLI flags
+When resolveTLSOptions is called
+Then the environment overrides the configuration file and the flag overrides the environment
+
+Related spec scenarios: RS.CLI.37, RS.CLI.38
+*/
+func TestTLSConfigPrecedence(t *testing.T) {
+	unsetTLSEnv(t)
+
+	t.Run("configuration file values", func(t *testing.T) {
+		viper.Reset()
+		viper.SetConfigType("yaml")
+		require.NoError(t, viper.ReadConfig(bytes.NewBufferString(`tls_cert: config.crt
+tls_key: config.key
+tls_port: 9443`)))
+		cmd := newTLSFlagCmd()
+		bindTLSFlags(t, cmd)
+		tls := resolveTLSOptions(cmd)
+		assert.Equal(t, "config.crt", tls.cert)
+		assert.Equal(t, "config.key", tls.key)
+		assert.Equal(t, 9443, tls.port)
+		assert.True(t, tls.portSet)
+	})
+
+	t.Run("environment overrides configuration file", func(t *testing.T) {
+		viper.Reset()
+		viper.SetEnvPrefix("OASMOCK")
+		viper.AutomaticEnv()
+		t.Setenv("OASMOCK_TLS_CERT", "env.crt")
+		t.Setenv("OASMOCK_TLS_KEY", "env.key")
+		t.Setenv("OASMOCK_TLS_PORT", "9444")
+		viper.SetConfigType("yaml")
+		require.NoError(t, viper.ReadConfig(bytes.NewBufferString(`tls_cert: config.crt
+tls_key: config.key
+tls_port: 9443`)))
+		cmd := newTLSFlagCmd()
+		bindTLSFlags(t, cmd)
+		tls := resolveTLSOptions(cmd)
+		assert.Equal(t, "env.crt", tls.cert)
+		assert.Equal(t, "env.key", tls.key)
+		assert.Equal(t, 9444, tls.port)
+	})
+
+	t.Run("flag overrides environment and configuration file", func(t *testing.T) {
+		viper.Reset()
+		viper.SetEnvPrefix("OASMOCK")
+		viper.AutomaticEnv()
+		t.Setenv("OASMOCK_TLS_PORT", "9444")
+		viper.SetConfigType("yaml")
+		require.NoError(t, viper.ReadConfig(bytes.NewBufferString("tls_port: 9443")))
+		cmd := newTLSFlagCmd()
+		bindTLSFlags(t, cmd)
+		require.NoError(t, cmd.Flags().Set("tls-port", "9445"))
+		require.NoError(t, cmd.Flags().Set("tls-cert", "flag.crt"))
+		require.NoError(t, cmd.Flags().Set("tls-key", "flag.key"))
+		tls := resolveTLSOptions(cmd)
+		assert.Equal(t, "flag.crt", tls.cert)
+		assert.Equal(t, "flag.key", tls.key)
+		assert.Equal(t, 9445, tls.port)
+	})
+}
+
+func newTLSFlagCmd() *cobra.Command {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("tls-cert", "", "")
+	cmd.Flags().String("tls-key", "", "")
+	cmd.Flags().Int("tls-port", defaultTLSPort, "")
+	return cmd
+}
+
+func bindTLSFlags(t *testing.T, cmd *cobra.Command) {
+	t.Helper()
+	require.NoError(t, viper.BindPFlag("tls_cert", cmd.Flags().Lookup("tls-cert")))
+	require.NoError(t, viper.BindPFlag("tls_key", cmd.Flags().Lookup("tls-key")))
+	require.NoError(t, viper.BindPFlag("tls_port", cmd.Flags().Lookup("tls-port")))
+}
+
+// unsetTLSEnv removes ambient TLS environment variables so tests that expect
+// configuration-file or flag values are not affected by the caller's shell.
+func unsetTLSEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"OASMOCK_TLS_CERT", "OASMOCK_TLS_KEY", "OASMOCK_TLS_PORT"} {
+		value, exists := os.LookupEnv(key)
+		require.NoError(t, os.Unsetenv(key))
+		t.Cleanup(func() {
+			if exists {
+				_ = os.Setenv(key, value)
+				return
+			}
+			_ = os.Unsetenv(key)
+		})
+	}
 }
