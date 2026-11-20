@@ -151,6 +151,7 @@ flowchart LR
 **Purpose**: Core HTTP/WebSocket server and component coordination.
 - **Key Files**:
   - `server.go` - Main server implementation (Controller) + HTTP handlers
+  - `tls.go` - Optional HTTPS listener lifecycle (`ListenTLS`/`ServeTLS`), certificate loading and TLS version policy
   - `interfaces.go` - All public interfaces and dependency definitions
   - `engine.go` - `exampleEngine`: selection, templating, state, async rendering (implements `MessageRenderer`)
   - `registry.go` - `exampleRegistry`: x-mock-once markers, dynamic examples, TTL sweep
@@ -187,6 +188,7 @@ flowchart LR
     interfaces.
 - **Responsibilities**:
   - HTTP request routing using Chi router
+  - Optional HTTPS listener sharing the router, state, history and event runtime
   - WebSocket upgrades and connection lifecycle
   - SignalR hub serving for documents with root `x-signalr`
   - Event-driven push bus decoupling REST producers from ws consumers
@@ -409,10 +411,14 @@ sequenceDiagram
     ServerNew-->>-CLI: *Server instance
 
     Note over CLI,HTTPServer: === Server Startup ===
-    CLI->>+ServerStart: Listen() (binds the port)
+    CLI->>+ServerStart: Listen() (binds the HTTP port)
     ServerStart-->>-CLI: Bound port (OS-assigned when --port 0)
-    CLI->>+ServerStart: Serve(listener) (goroutine)
-    ServerStart->>+HTTPServer: Serve(ln)
+    opt TLS configured
+        CLI->>+ServerStart: ListenTLS() (loads cert/key, binds the TLS port)
+        ServerStart-->>-CLI: Bound TLS port (OS-assigned when --tls-port 0)
+    end
+    CLI->>+ServerStart: Serve(listener) and ServeTLS(tlsListener) (goroutines)
+    ServerStart->>+HTTPServer: Serve(ln) / ServeTLS(tlsLn)
     ServerStart-->>-CLI: Server running
     CLI->>CLI: Wait for interrupt signal
     CLI-->>-User: Server ready message

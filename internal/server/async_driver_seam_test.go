@@ -13,12 +13,13 @@ import (
 
 // stubAsyncDriver records calls through the asyncDriver seam.
 type stubAsyncDriver struct {
-	fired      []string
-	checked    []string
-	targeted   bool
-	removedJob string
-	removedSub string
-	registered *loader.MessageExampleSpec
+	fired         []string
+	checked       []string
+	targeted      bool
+	removedJob    string
+	removedSub    string
+	registered    *loader.MessageExampleSpec
+	shutdownCalls int
 }
 
 func (d *stubAsyncDriver) fire(name string, payload map[string]any, schema string, global bool, delay *eventbus.DelaySchedule) {
@@ -37,7 +38,7 @@ func (d *stubAsyncDriver) doneChannel() <-chan struct{} {
 	return ch
 }
 func (d *stubAsyncDriver) registerEventSubscriptions(schemas []SchemaInfo) error { return nil }
-func (d *stubAsyncDriver) shutdown()                                             {}
+func (d *stubAsyncDriver) shutdown()                                             { d.shutdownCalls++ }
 func (d *stubAsyncDriver) registerRuntimeExample(id, address, prefix string, spec *loader.MessageExampleSpec) (extensions.TriggerKind, string, error) {
 	d.registered = spec
 	return extensions.TriggerEvent, "", nil

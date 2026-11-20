@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,11 +19,23 @@ import (
 )
 
 const (
-	defaultPort  = 19191
-	defaultDelay = 100 // milliseconds
-	minPort      = 1
-	maxPort      = 65535
+	defaultPort    = 19191
+	defaultTLSPort = 8443
+	defaultDelay   = 100 // milliseconds
+	minPort        = 1
+	maxPort        = 65535
 )
+
+type tlsOptions struct {
+	cert    string
+	key     string
+	port    int
+	portSet bool
+}
+
+func (t tlsOptions) enabled() bool {
+	return t.cert != "" && t.key != ""
+}
 
 type mockConfig struct {
 	sources      []string
@@ -33,6 +46,7 @@ type mockConfig struct {
 	noCORS       bool
 	historySize  int
 	noControlAPI bool
+	tls          tlsOptions
 }
 
 func validationError(format string, args ...any) error {
@@ -56,11 +70,64 @@ func portError(format string, args ...any) error {
 	}
 }
 
+func certificateError(format string, args ...any) error {
+	return &cliError{
+		code:    5,
+		message: fmt.Sprintf(format, args...),
+	}
+}
+
 // validatePort validates the --port flag value. Port 0 selects an OS-assigned
 // (ephemeral) port and is always valid (RS.CLI.32).
 func validatePort(port int) error {
 	if port != 0 && (port < minPort || port > maxPort) {
 		return validationError("port must be between 1 and 65535")
+	}
+	return nil
+}
+
+// tlsPortExplicit reports whether the TLS port came from a CLI flag, an
+// environment variable, or the configuration file. viper.IsSet cannot be used
+// because the bound flag default makes every key appear set.
+func tlsPortExplicit(cmd *cobra.Command) bool {
+	if cmd != nil {
+		if flag := cmd.Flags().Lookup("tls-port"); flag != nil && flag.Changed {
+			return true
+		}
+	}
+	if _, ok := os.LookupEnv("OASMOCK_TLS_PORT"); ok {
+		return true
+	}
+	return viper.InConfig("tls_port")
+}
+
+func resolveTLSOptions(cmd *cobra.Command) tlsOptions {
+	return tlsOptions{
+		cert:    viper.GetString("tls_cert"),
+		key:     viper.GetString("tls_key"),
+		port:    viper.GetInt("tls_port"),
+		portSet: tlsPortExplicit(cmd),
+	}
+}
+
+// validateTLSOptions rejects incomplete TLS configuration before any listener
+// is bound. Port 0 selects an OS-assigned (ephemeral) TLS port (RS.CLI.36).
+func validateTLSOptions(t tlsOptions, httpPort int) error {
+	hasCert, hasKey := t.cert != "", t.key != ""
+	if hasCert != hasKey {
+		return validationError("--tls-cert and --tls-key must be provided together")
+	}
+	if t.portSet && !t.enabled() {
+		return validationError("--tls-port requires both --tls-cert and --tls-key")
+	}
+	if !t.enabled() {
+		return nil
+	}
+	if t.port != 0 && (t.port < minPort || t.port > maxPort) {
+		return validationError("TLS port must be between 1 and 65535")
+	}
+	if t.port != 0 && t.port == httpPort {
+		return validationError("TLS port must differ from the HTTP port")
 	}
 	return nil
 }
@@ -138,6 +205,9 @@ func init() {
 	mockCmd.Flags().BoolVar(&config.noCORS, "nocors", false, "Disable automatic CORS compliance.")
 	mockCmd.Flags().IntVar(&config.historySize, "history-size", server.DefaultHistorySize, "Maximum number of requests to keep in history.")
 	mockCmd.Flags().BoolVar(&config.noControlAPI, "no-control-api", false, "Disable the management control API.")
+	mockCmd.Flags().StringVar(&config.tls.cert, "tls-cert", "", "Path to the PEM TLS certificate. Requires --tls-key.")
+	mockCmd.Flags().StringVar(&config.tls.key, "tls-key", "", "Path to the PEM TLS private key. Requires --tls-cert.")
+	mockCmd.Flags().IntVar(&config.tls.port, "tls-port", defaultTLSPort, "Port for the additional HTTPS listener. Use 0 to bind an OS-assigned port.")
 
 	// Bind environment variables
 	viper.SetEnvPrefix("OASMOCK")
@@ -154,6 +224,9 @@ func init() {
 	_ = viper.BindPFlag("nocors", mockCmd.Flags().Lookup("nocors"))
 	_ = viper.BindPFlag("history_size", mockCmd.Flags().Lookup("history-size"))
 	_ = viper.BindPFlag("no_control_api", mockCmd.Flags().Lookup("no-control-api"))
+	_ = viper.BindPFlag("tls_cert", mockCmd.Flags().Lookup("tls-cert"))
+	_ = viper.BindPFlag("tls_key", mockCmd.Flags().Lookup("tls-key"))
+	_ = viper.BindPFlag("tls_port", mockCmd.Flags().Lookup("tls-port"))
 }
 
 func runMock(cmd *cobra.Command, args []string) error {
@@ -174,10 +247,10 @@ func runMock(cmd *cobra.Command, args []string) error {
 		return schemaError("failed to create server: %v", err)
 	}
 
-	// Bind the port up front so the "started" log is only emitted after a
-	// successful bind and carries the actual bound port (--port 0 selects an
-	// OS-assigned port, RS.CLI.11/RS.CLI.32). A collision is reported
-	// synchronously with exit code 4 (RS.CLI.17).
+	// Bind the ports up front so the "started" logs are only emitted after
+	// successful binds and carry the actual bound ports (--port 0/--tls-port 0
+	// select OS-assigned ports, RS.CLI.11/RS.CLI.32/RS.CLI.36). A collision is
+	// reported synchronously with exit code 4 (RS.CLI.17/RS.CLI.43).
 	ln, boundPort, err := srv.Listen()
 	if err != nil {
 		if errors.Is(err, syscall.EADDRINUSE) {
@@ -186,17 +259,42 @@ func runMock(cmd *cobra.Command, args []string) error {
 		return portError("failed to listen on port %d: %v", cfg.port, err)
 	}
 
-	// Serve in a goroutine so we can handle signals
-	serverErrChan := make(chan error, 1)
-	go func() {
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			slog.Error("Server error", "err", err)
-			serverErrChan <- err
+	var tlsLn net.Listener
+	var tlsBoundPort int
+	if cfg.tls.enabled() {
+		tlsLn, tlsBoundPort, err = srv.ListenTLS()
+		if err != nil {
+			_ = ln.Close()
+			_ = srv.Shutdown(context.Background())
+			if errors.Is(err, syscall.EADDRINUSE) {
+				return portError("TLS port %d is already in use", cfg.tls.port)
+			}
+			if errors.Is(err, server.ErrTLSCertificate) {
+				return certificateError("failed to load TLS certificate or key: %v", err)
+			}
+			return portError("failed to listen for TLS on port %d: %v", cfg.tls.port, err)
 		}
-	}()
+	}
 
-	// Wait for interrupt signal
+	// Serve in goroutines so we can handle signals
+	serverErrChan := make(chan error, 2)
+	serve := func(name string, serveFn func(net.Listener) error, listener net.Listener) {
+		go func() {
+			if err := serveFn(listener); err != nil && err != http.ErrServerClosed {
+				slog.Error(name+" error", "err", err)
+				serverErrChan <- err
+			}
+		}()
+	}
+	serve("Server", srv.Serve, ln)
+	if tlsLn != nil {
+		serve("TLS server", srv.ServeTLS, tlsLn)
+	}
+
 	slog.Info("Mock server started", "port", boundPort)
+	if tlsLn != nil {
+		slog.Info("TLS listener started", "port", tlsBoundPort)
+	}
 	slog.Info("Press Ctrl+C to stop")
 
 	// Set up signal handling for graceful shutdown
@@ -222,6 +320,14 @@ func runMock(cmd *cobra.Command, args []string) error {
 
 // serverConfig converts the resolved CLI configuration into the server config.
 func (c mockConfig) serverConfig() server.Config {
+	var tlsConfig *server.TLSConfig
+	if c.tls.enabled() {
+		tlsConfig = &server.TLSConfig{
+			CertFile: c.tls.cert,
+			KeyFile:  c.tls.key,
+			Port:     c.tls.port,
+		}
+	}
 	return server.Config{
 		Port:             c.port,
 		Delay:            time.Duration(c.delay) * time.Millisecond,
@@ -229,6 +335,7 @@ func (c mockConfig) serverConfig() server.Config {
 		EnableCORS:       !c.noCORS,
 		HistorySize:      c.historySize,
 		EnableControlAPI: !c.noControlAPI,
+		TLS:              tlsConfig,
 	}
 }
 
@@ -261,6 +368,7 @@ func resolveMockConfig(cmd *cobra.Command) (mockConfig, error) {
 		noCORS:       viper.GetBool("nocors"),
 		historySize:  viper.GetInt("history_size"),
 		noControlAPI: viper.GetBool("no_control_api"),
+		tls:          resolveTLSOptions(cmd),
 	}
 
 	// Configure structured logging from the single resolved verbosity value.
@@ -290,6 +398,9 @@ func validateMockConfig(cfg mockConfig) error {
 	}
 	if cfg.historySize < 0 {
 		return validationError("history size cannot be negative")
+	}
+	if err := validateTLSOptions(cfg.tls, cfg.port); err != nil {
+		return err
 	}
 	return nil
 }

@@ -44,17 +44,22 @@ func FindFreePort(t *testing.T) int {
 // ServerBuilder provides a fluent interface for configuring and starting an oasmock server.
 // No validation is performed - invalid configurations will be caught by the CLI.
 type ServerBuilder struct {
-	t            *testing.T
-	port         int      // 0 = auto-find free port
-	schemas      []string // --from values
-	prefixes     []string // --prefix values (optional, must match schemas length if provided)
-	verbose      bool     // --verbose
-	delay        int      // --delay (milliseconds)
-	noCORS       bool     // --nocors
-	historySize  int      // --history-size
-	noControlAPI bool     // --no-control-api
-	extraArgs    []string // Additional raw CLI arguments
-	env          []string // Environment variables
+	t             *testing.T
+	port          int      // 0 = auto-find free port
+	schemas       []string // --from values
+	prefixes      []string // --prefix values (optional, must match schemas length if provided)
+	verbose       bool     // --verbose
+	delay         int      // --delay (milliseconds)
+	noCORS        bool     // --nocors
+	historySize   int      // --history-size
+	noControlAPI  bool     // --no-control-api
+	tlsCert       string   // --tls-cert
+	tlsKey        string   // --tls-key
+	tlsPort       int      // --tls-port (0 = OS-assigned)
+	tlsPortSet    bool     // whether --tls-port was explicitly configured
+	extraArgs     []string // Additional raw CLI arguments
+	env           []string // Environment variables
+	actualTLSPort int      // bound TLS port after Run
 }
 
 // Cmd creates a new ServerBuilder for configuring an oasmock server.
@@ -106,6 +111,32 @@ func (b *ServerBuilder) DisableControlAPI(disable bool) *ServerBuilder {
 	return b
 }
 
+// SetTLSCert sets the PEM certificate path for the additional HTTPS listener.
+func (b *ServerBuilder) SetTLSCert(path string) *ServerBuilder {
+	b.tlsCert = path
+	return b
+}
+
+// SetTLSKey sets the PEM private key path for the additional HTTPS listener.
+func (b *ServerBuilder) SetTLSKey(path string) *ServerBuilder {
+	b.tlsKey = path
+	return b
+}
+
+// SetTLSPort sets the additional HTTPS listener port. Use 0 for an
+// OS-assigned port.
+func (b *ServerBuilder) SetTLSPort(port int) *ServerBuilder {
+	b.tlsPort = port
+	b.tlsPortSet = true
+	return b
+}
+
+// TLSPort returns the bound TLS port after Run. It is zero when TLS is not
+// configured or before the port has been observed.
+func (b *ServerBuilder) TLSPort() int {
+	return b.actualTLSPort
+}
+
 // AddArg adds a raw CLI argument for advanced configuration.
 func (b *ServerBuilder) AddArg(arg string) *ServerBuilder {
 	b.extraArgs = append(b.extraArgs, arg)
@@ -155,6 +186,15 @@ func (b *ServerBuilder) Run() (*exec.Cmd, <-chan error, int) {
 	}
 	if b.noControlAPI {
 		args = append(args, "--no-control-api")
+	}
+	if b.tlsCert != "" {
+		args = append(args, "--tls-cert", b.tlsCert)
+	}
+	if b.tlsKey != "" {
+		args = append(args, "--tls-key", b.tlsKey)
+	}
+	if b.tlsPortSet {
+		args = append(args, "--tls-port", fmt.Sprintf("%d", b.tlsPort))
 	}
 	args = append(args, b.extraArgs...)
 
@@ -219,6 +259,16 @@ func (b *ServerBuilder) Run() (*exec.Cmd, <-chan error, int) {
 	if b.port <= 0 {
 		actualPort = waitForBoundPort(b.t, captured, errCh, 5*time.Second)
 	}
+	if b.tlsCert != "" && b.tlsKey != "" {
+		switch {
+		case b.tlsPortSet && b.tlsPort > 0:
+			b.actualTLSPort = b.tlsPort
+		case b.tlsPortSet:
+			b.actualTLSPort = waitForLoggedPort(b.t, captured, errCh, tlsPortPattern, 5*time.Second, "TLS listener")
+		default:
+			b.actualTLSPort = defaultTLSPort
+		}
+	}
 
 	return cmd, errCh, actualPort
 }
@@ -228,9 +278,20 @@ func (b *ServerBuilder) Run() (*exec.Cmd, <-chan error, int) {
 // listener has bound successfully.
 var boundPortPattern = regexp.MustCompile(`msg="Mock server started"[^\n]*port=(\d+)`)
 
+// tlsPortPattern matches the TLS listener startup log line
+// (`msg="TLS listener started" port=N`).
+var tlsPortPattern = regexp.MustCompile(`msg="TLS listener started"[^\n]*port=(\d+)`)
+
+const defaultTLSPort = 8443
+
 // waitForBoundPort blocks until the server's startup log reports the bound
 // port, or the process exits / a timeout elapses.
 func waitForBoundPort(t *testing.T, captured *capturedOutput, errCh <-chan error, timeout time.Duration) int {
+	t.Helper()
+	return waitForLoggedPort(t, captured, errCh, boundPortPattern, timeout, "bound port")
+}
+
+func waitForLoggedPort(t *testing.T, captured *capturedOutput, errCh <-chan error, pattern *regexp.Regexp, timeout time.Duration, label string) int {
 	t.Helper()
 	deadline := time.After(timeout)
 	ticker := time.NewTicker(20 * time.Millisecond)
@@ -238,15 +299,15 @@ func waitForBoundPort(t *testing.T, captured *capturedOutput, errCh <-chan error
 	for {
 		select {
 		case <-ticker.C:
-			if m := boundPortPattern.FindStringSubmatch(captured.string()); m != nil {
+			if m := pattern.FindStringSubmatch(captured.string()); m != nil {
 				if p, err := strconv.Atoi(m[1]); err == nil && p > 0 {
 					return p
 				}
 			}
 		case err := <-errCh:
-			t.Fatalf("oasmock exited before reporting its bound port (err=%v); log:\n%s", err, captured.string())
+			t.Fatalf("oasmock exited before reporting its %s (err=%v); log:\n%s", label, err, captured.string())
 		case <-deadline:
-			t.Fatalf("timed out waiting for oasmock to report its bound port; log:\n%s", captured.string())
+			t.Fatalf("timed out waiting for oasmock to report its %s; log:\n%s", label, captured.string())
 		}
 	}
 }

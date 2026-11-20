@@ -63,9 +63,27 @@ docker run -e OASMOCK_PORT=8080 \
            --from /schemas/api.yaml --prefix /v1
 ```
 
+### TLS / HTTPS
+
+The image exposes two ports: `19191` for plain HTTP and `8443` for the optional HTTPS listener. Mount the PEM certificate and key read-only and point the container at them:
+
+```bash
+docker run \
+  -p 19191:19191 -p 8443:8443 \
+  -e OASMOCK_TLS_CERT=/certs/server.crt \
+  -e OASMOCK_TLS_KEY=/certs/server.key \
+  -e OASMOCK_TLS_PORT=8443 \
+  -v $(pwd)/certs:/certs:ro \
+  itmamonth/oasmock:latest --from /schemas/api.yaml
+```
+
+TLS is enabled only when both the certificate and key are present. The same values can be passed as `--tls-cert`/`--tls-key`/`--tls-port` or as `tls_cert`/`tls_key`/`tls_port` in `.oasmock.yaml`. The HTTPS listener shares routes, state, history, `wss://` channels and SignalR hubs with the HTTP listener.
+
+The container runs as UID `65532`, so the mounted certificate and key must be readable by that user. Development setups commonly use `chmod 644`; for stricter environments, set the file ownership/ACLs to grant UID `65532` read access. Invalid or mismatched certificate pairs make the process exit with code `5`.
+
 ### Port
 
-The default port is `19191` (matching the CLI default). Publish it to the host with `-p`:
+The default HTTP port is `19191` (matching the CLI default) and the default HTTPS port is `8443`. Publish them to the host with `-p`:
 
 ```bash
 docker run -p 19191:19191 itmamonth/oasmock:latest --from /schemas/api.yaml
@@ -87,6 +105,26 @@ services:
     restart: unless-stopped
 ```
 
+With HTTPS enabled:
+
+```yaml
+services:
+  oasmock:
+    image: itmamonth/oasmock:latest
+    ports:
+      - "19191:19191"
+      - "8443:8443"
+    environment:
+      OASMOCK_TLS_CERT: /certs/server.crt
+      OASMOCK_TLS_KEY: /certs/server.key
+      OASMOCK_TLS_PORT: "8443"
+    volumes:
+      - ./oasmock.yaml:/app/.oasmock.yaml:ro
+      - ./schemas:/schemas:ro
+      - ./certs:/certs:ro
+    restart: unless-stopped
+```
+
 ## Building Locally
 
 The image packages a pre‑built binary, so build the binary first, then the image:
@@ -105,5 +143,5 @@ The published image supports `linux/amd64` and `linux/arm64`. A multi‑architec
 
 - **Hardened base**: The image is based on `gcr.io/distroless/static-debian12:nonroot` — no shell, no package manager, minimal attack surface.
 - **Non‑root**: The container runs as an unprivileged user (UID 65532).
-- **Read‑only mounts**: Mount schema files and config with `:ro` to prevent modification.
+- **Read‑only mounts**: Mount schema files, config, and TLS certificate/key files with `:ro` to prevent modification. Ensure UID `65532` can read the certificate pair.
 - **No secrets**: Do not bake credentials into the image; use environment variables or mounted secrets.

@@ -1,5 +1,5 @@
 name: Smoke Test Docker Image
-description: Build the release Docker image with the same build-push-action configuration used for publishing, load it locally, and verify the mock server starts and serves the control API.
+description: Build the release Docker image with the same build-push-action configuration used for publishing, load it locally, and verify the mock server starts and serves the control API over plain HTTP and HTTPS.
 
 inputs:
   image-name:
@@ -27,20 +27,39 @@ runs:
     - name: Smoke test image
       shell: bash
       run: |
-        docker rm -f oasmock-smoke >/dev/null 2>&1 || true
-        docker run -d --name oasmock-smoke -p 19191:19191 \
+        cert_dir="$(mktemp -d)"
+        # mktemp creates a 0700 directory; the container runs as UID 65532 and
+        # must be able to traverse it before it can read the certificate pair.
+        chmod 755 "$cert_dir"
+        cleanup() {
+          docker rm -f oasmock-smoke >/dev/null 2>&1 || true
+          rm -rf "$cert_dir"
+        }
+        trap cleanup EXIT
+
+        openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+          -keyout "$cert_dir/key.pem" -out "$cert_dir/cert.pem" \
+          -subj "/CN=localhost" >/dev/null 2>&1
+        # The container runs as UID 65532; the directory must be traversable
+        # (755 above) and the mounted pair readable.
+        chmod 644 "$cert_dir/cert.pem" "$cert_dir/key.pem"
+
+        docker run -d --name oasmock-smoke -p 19191:19191 -p 8443:8443 \
+          -e OASMOCK_TLS_CERT=/certs/cert.pem \
+          -e OASMOCK_TLS_KEY=/certs/key.pem \
+          -e OASMOCK_TLS_PORT=8443 \
           -v "$GITHUB_WORKSPACE/api/openapi.yaml:/app/src/openapi.yaml" \
+          -v "$cert_dir:/certs:ro" \
           "${{ inputs.image-name }}" >/dev/null
         for _ in $(seq 1 15); do
-          if curl -sf http://localhost:19191/_mock/requests >/dev/null 2>&1; then
-            echo "Smoke test passed: server serving control API on :19191"
-            docker rm -f oasmock-smoke >/dev/null 2>&1 || true
+          if curl -sf http://localhost:19191/_mock/requests >/dev/null 2>&1 \
+            && curl -kfsS https://localhost:8443/_mock/requests >/dev/null 2>&1; then
+            echo "Smoke test passed: server serving HTTP on :19191 and HTTPS on :8443"
             exit 0
           fi
           sleep 1
         done
-        echo "ERROR: smoke test failed - server did not serve the control API on :19191 within 15s"
+        echo "ERROR: smoke test failed - server did not serve HTTP :19191 and HTTPS :8443 within 15s"
         echo "--- container logs ---"
         docker logs oasmock-smoke 2>&1 || true
-        docker rm -f oasmock-smoke >/dev/null 2>&1 || true
         exit 1

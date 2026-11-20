@@ -16,6 +16,7 @@ A Go‑based mock server that leverages OpenAPI 3.0 schemas enhanced with custom
 - Request history ring buffer with filtering via management API
 - Dynamic example injection at runtime via HTTP API
 - Configurable request delay, CORS, verbose logging
+- Optional additional HTTPS listener with TLS 1.2/1.3, sharing state and `wss://` support with HTTP
 - Single static binary, no runtime dependencies
 - JSON‑RPC 2.0 gateway via `x‑rpc` extension (batch requests, notifications)
 
@@ -158,7 +159,15 @@ oasmock --from api.yaml --nocors --no-control-api
 export OASMOCK_PORT=9999
 export OASMOCK_VERBOSE=true
 oasmock --from api.yaml
+
+# Serve HTTP and HTTPS simultaneously
+oasmock --from api.yaml \
+  --tls-cert ./certs/server.crt \
+  --tls-key ./certs/server.key \
+  --tls-port 8443
 ```
+
+The HTTPS listener is optional and shares routes, state, history, `wss://` channels and SignalR hubs with the plain HTTP listener. See [docs/cli.md](./docs/cli.md) for every TLS flag/environment/config option and [docs/docker.md](./docs/docker.md) for mounting certificates in Docker.
 
 ## Development
 

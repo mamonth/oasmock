@@ -22,6 +22,9 @@ oasmock [options]
 | `--nocors`         | boolean   | `false`            | Disable automatic CORS compliance.                                       |
 | `--no-control-api` | boolean   | `false`            | Disable management HTTP API served at _mock/                             |
 | `--history-size`   | number    | `1000`             | Maximum number of requests to keep in history.                           |
+| `--tls-cert`       | string    | `''`               | Path to the PEM TLS certificate. Requires `--tls-key`.                    |
+| `--tls-key`        | string    | `''`               | Path to the PEM TLS private key. Requires `--tls-cert`.                   |
+| `--tls-port`       | number    | `8443`             | Port for the additional HTTPS listener. `0` binds an OS-assigned port.    |
 | `--version`, `-v`  | boolean   | `false`            | Show version information and exit.                                       |
 | `--help`, `-h`     | boolean   | `false`            | Show global help and exit.                                               |
 
@@ -36,6 +39,9 @@ All values are overridable by their CLI option counterparts.
 | `OASMOCK_NO_CORS`        | If `true`, disables CORS.           |
 | `OASMOCK_NO_CONTROL_API` | Disable management HTTP API.        |
 | `OASMOCK_HISTORY_SIZE`   | Maximum request history size.       |
+| `OASMOCK_TLS_CERT`       | Path to the PEM TLS certificate.    |
+| `OASMOCK_TLS_KEY`        | Path to the PEM TLS private key.    |
+| `OASMOCK_TLS_PORT`       | Port for the HTTPS listener.        |
 
 ### Configuration File
 
@@ -58,6 +64,9 @@ The CLI can read configuration from a `.oasmock.yaml` file in the current workin
 | `nocors`          | boolean             | Disable automatic CORS compliance.                                       |
 | `history_size`    | number              | Maximum number of requests to keep in history.                           |
 | `no_control_api`  | boolean             | Disable the management control API.                                      |
+| `tls_cert`        | string              | Path to the PEM TLS certificate.                                         |
+| `tls_key`         | string              | Path to the PEM TLS private key.                                        |
+| `tls_port`        | number              | Port for the additional HTTPS listener (default `8443`).                 |
 
 **Schema types:** each `--from`/`schemas` entry may reference an OpenAPI (`openapi:` root key) or AsyncAPI (`asyncapi:` root key, 3.0.0/3.1.0) file. Spec type is detected automatically from the root version key — no flags change. Mixed OpenAPI + AsyncAPI sources can be served together.
 
@@ -100,6 +109,26 @@ oasmock --delay 500 --verbose
 oasmock --nocors
 ```
 
+**Serve HTTP and HTTPS simultaneously**:
+```bash
+oasmock --from api.yaml \
+  --tls-cert ./certs/server.crt \
+  --tls-key ./certs/server.key \
+  --tls-port 8443
+```
+
+The plain HTTP listener stays on `--port` (default `19191`). The additional HTTPS listener uses `--tls-port` (default `8443`) and shares routes, state, history, `ws://`/`wss://` channels, and SignalR hubs with the HTTP listener.
+
+**Use TLS configuration from the environment**:
+```bash
+export OASMOCK_TLS_CERT=./certs/server.crt
+export OASMOCK_TLS_KEY=./certs/server.key
+export OASMOCK_TLS_PORT=9443
+oasmock --from api.yaml
+```
+
+TLS is enabled only when both `tls_cert`/`OASMOCK_TLS_CERT`/`--tls-cert` and the matching key are provided. Supplying only one, or setting a TLS port without the pair, is an error. The certificate and key must be a matching PEM pair; they are loaded before the listener starts. TLS 1.2 and TLS 1.3 are accepted, with TLS 1.3 negotiated when the client supports it.
+
 ## Exit Codes
 
 | Code | Meaning                               |
@@ -108,4 +137,6 @@ oasmock --nocors
 | 1    | General error                         |
 | 2    | Invalid command‑line arguments        |
 | 3    | Schema loading or validation failed   |
+| 4    | Port already in use                   |
+| 5    | TLS certificate or key loading failed |
 

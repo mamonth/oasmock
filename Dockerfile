@@ -7,6 +7,6 @@ WORKDIR /app
 
 COPY --chmod=+x oasmock-${TARGETOS}-${TARGETARCH}* /app/oasmock
 
-EXPOSE 19191
+EXPOSE 19191 8443
 
 ENTRYPOINT ["/app/oasmock"]
