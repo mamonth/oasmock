@@ -11,15 +11,17 @@ The OASMock CI/CD pipeline is a unified GitHub Actions workflow that ensures cod
 3. **Integration Testing Against Built Binary**: Integration tests run against the actual binary that will be shipped
 4. **Same Binary for Release**: The release process uses the exact same binaries that passed integration tests
 5. **Cross-Platform Support**: Builds for Linux, macOS, and Windows
+6. **Prepare Before Publish**: every release preparation step (npm packaging, Docker metadata, image smoke test) completes before anything is published, and publishing only starts once all preparation jobs are green
 
 ## Pipeline Architecture
 
 ```mermaid
 flowchart TD
-    subgraph P1["Parallel Fast Checks"]
+    subgraph P1["Parallel Preparation & Fast Checks"]
         direction LR
         A[Unit Tests & Coverage]
         B[Spec Coverage Check]
+        B2[Spec Validation<br/>Spectral + codegen freshness]
     end
 
     subgraph P2["Build & Package"]
@@ -37,20 +39,30 @@ flowchart TD
         H2[Build & Smoke Test Image]
     end
 
-    subgraph P4["Release Tags Only"]
+    subgraph P4["Release Preparation (tags only)"]
+        G0[Download Binaries]
+        G1[Create npm Package + Generate Docker Metadata]
+        G2b[Build & Smoke Test Image]
+    end
+
+    subgraph P5["Release Publishing (tags only)"]
         G[Create GitHub Release]
         H[Publish npm Package]
-        J[Smoke Test & Push Docker Image<br/>linux/amd64 + linux/arm64]
+        J[Push Docker Image<br/>linux/amd64 + linux/arm64]
     end
 
     A --> C
     B --> C
+    B2 --> C
     C --> D
     D --> E
     E --> F
     D --> G2
     G2 --> H2
-    F --> G
+    F --> G0
+    G0 --> G1
+    G1 --> G2b
+    G2b --> G
     G --> H
     H --> J
 ```
@@ -59,9 +71,9 @@ flowchart TD
 
 | Event | Description | Jobs Executed |
 |-------|-------------|---------------|
-| `push` to `main` | Code changes to main branch | All jobs except release and docker-build |
-| `pull_request` to `main` | Pull request creation/update | All jobs except release |
-| `push` of `v*` tag | Version tag push (e.g., v1.0.0) | All jobs including release |
+| `push` to `main` | Code changes to main branch | All jobs except `docker-build` (PR-only), `release-prepare`, and `release` (tag-only) |
+| `pull_request` to `main` | Pull request creation/update | All jobs except `release-prepare` and `release` |
+| `push` of `v*` tag | Version tag push (e.g., v1.0.0) | All jobs, including `release-prepare` then `release` |
 
 ## Job Details
 
@@ -94,11 +106,24 @@ flowchart TD
 
 **Coverage Requirement:** 100% scenario coverage (0.999 threshold)
 
-### 3. Build Binaries
+### 3. Spec Validation
+
+**Job Name:** `spec-validation`  
+**Runs On:** `ubuntu-latest`  
+**Purpose:** Lint the OpenAPI/AsyncAPI specs and verify generated artifacts are current
+
+**Steps:**
+1. Checkout code
+2. Set up Node.js
+3. Lint `api/openapi.yaml` and `api/asyncapi.yaml` with Spectral
+4. Set up Go 1.23
+5. Regenerate the control schema and fail on drift (`git diff --exit-code`)
+
+### 4. Build Binaries
 
 **Job Name:** `build`  
 **Runs On:** `ubuntu-latest`  
-**Needs:** `unit-tests`, `spec-coverage`  
+**Needs:** `unit-tests`, `spec-coverage`, `spec-validation`  
 **Purpose:** Cross-compile binaries for all target platforms
 
 **Steps:**
@@ -114,7 +139,7 @@ flowchart TD
 
 **Outputs:** `version` (extracted from git)
 
-### 4. Integration Tests
+### 5. Integration Tests
 
 **Job Name:** `integration-tests`  
 **Runs On:** `ubuntu-latest`  
@@ -133,7 +158,7 @@ flowchart TD
 
 **Note:** Tests run against the exact binary that will be released
 
-### 5. Docker Image Build (PR Check)
+### 6. Docker Image Build (PR Check)
 
 **Job Name:** `docker-build`  
 **Runs On:** `ubuntu-latest`  
@@ -150,35 +175,50 @@ flowchart TD
 
 **Note:** This job is build-only — no image is pushed to any registry.
 
-### 6. Create Release
+### 7. Release Preparation
 
-**Job Name:** `release`  
+**Job Name:** `release-prepare`  
 **Runs On:** `ubuntu-latest`  
-**Needs:** `integration-tests`  
+**Needs:** `integration-tests` (transitively `build`, `unit-tests`, `spec-coverage`, `spec-validation`)  
 **When:** Only on tag pushes (`v*`)  
-**Permissions:** `contents: write`, `packages: write`, `id-token: write`  
-**Purpose:** Create or update GitHub release, publish npm package, and publish Docker image
+**Permissions:** `contents: read`  
+**Purpose:** Perform every release-side preparation step without publishing anything, so a preparation failure can never leave a partially published release
 
 **Steps:**
 1. Checkout code with full history
-2. Set up Go 1.23
-3. Download binaries artifact
-4. Make Linux binaries executable (`chmod +x`)
-5. Create or update GitHub release with all four binaries (handles auto-created drafts)
-6. Set up Node.js for npm publishing
-7. Create npm package structure:
+2. Download binaries artifact
+3. Make Linux binaries executable (`chmod +x`)
+4. Verify npm authentication
+5. Create npm package structure:
    - Copy binaries to `npm-package/bin/`
    - Create `install.js` script for platform detection
    - Generate `package.json` from template with version placeholder
-   - Copy documentation files (`README.md`, `LICENSE`, `CHANGELOG.md`, `docs/`)
-8. Publish to npm registry
-9. Build, smoke test and publish Docker image:
-   - Set up Docker Buildx and QEMU (for multi-platform emulation)
-   - Log in to Docker Hub
-   - Generate Docker tags from the git tag (`latest`, `vX.Y.Z`, `X.Y`, `X`)
-   - Copy linux binaries into the build context
-   - Smoke test the image (shared `smoke-test-image` action) before pushing
-   - Build and push multi-platform image (`linux/amd64`, `linux/arm64`) to `itmamonth/oasmock`, reusing the smoke-tested layers via GHA build cache
+   - Copy documentation files (`README.md`, `LICENSE`, `CHANGELOG.md`, `docs/`, `api/`)
+6. Upload the npm package as the `oasmock-npm-package` artifact
+7. Generate Docker tags/labels from the git tag (`latest`, `vX.Y.Z`, `X.Y`, `X`)
+8. Copy linux binaries into the build context
+9. Build and smoke test the image (shared `smoke-test-image` action) — no push
+
+**Outputs:** `version`, `tags`, `labels` (consumed by the publishing job)
+
+### 8. Release Publishing
+
+**Job Name:** `release`  
+**Runs On:** `ubuntu-latest`  
+**Needs:** `release-prepare`  
+**When:** Only on tag pushes (`v*`)  
+**Permissions:** `contents: write`, `packages: write`, `id-token: write`  
+**Purpose:** Publish only after every preparation job has succeeded; no npm or Docker publication happens while any preparation is failing
+
+**Steps:**
+1. Checkout code with full history
+2. Download binaries and npm package artifacts
+3. Make Linux binaries executable (`chmod +x`)
+4. Create or update GitHub release with all four binaries (handles auto-created drafts)
+5. Publish to npm registry (skips if the version already exists)
+6. Set up Docker Buildx and QEMU (for multi-platform emulation)
+7. Log in to Docker Hub
+8. Build and push multi-platform image (`linux/amd64`, `linux/arm64`) to `itmamonth/oasmock`, reusing the tags/labels from preparation and the smoke-tested layers via GHA build cache
 
 **Secrets Required:**
 - `GITHUB_TOKEN` (auto-provided by GitHub Actions)
@@ -199,6 +239,7 @@ flowchart LR
 
     subgraph ARTIFACTS["GitHub Artifacts"]
         E[oasmock-binaries]
+        E2[oasmock-npm-package]
     end
 
     subgraph INTEG["Integration Tests"]
@@ -209,8 +250,13 @@ flowchart LR
         G[oasmock:pr-test]
     end
 
-    subgraph RELEASE["Release Job"]
-        H[dist/*]
+    subgraph RELPREP["Release Preparation"]
+        H0[dist/* + npm-package/]
+        H1[oasmock:smoke-test]
+    end
+
+    subgraph RELPUB["Release Publishing"]
+        H[dist/* + npm-package/*]
     end
 
     subgraph GH["GitHub Release"]
@@ -225,13 +271,16 @@ flowchart LR
         K[itmamonth/oasmock]
     end
 
-    BUILD -->|Upload| ARTIFACTS
-    ARTIFACTS -->|Download linux only| INTEG
-    ARTIFACTS -->|Download all| DOCKERPR
-    ARTIFACTS -->|Download all| RELEASE
-    RELEASE -->|Create release with binaries| GH
-    RELEASE -->|Publish package| NPM
-    RELEASE -->|Build & push multi-platform| DH
+    BUILD -->|Upload| E
+    E -->|Download linux only| INTEG
+    E -->|Download all| DOCKERPR
+    E -->|Download all| RELPREP
+    RELPREP -->|Create package| E2
+    E -->|Download all| RELPUB
+    E2 -->|Download| RELPUB
+    RELPUB -->|Create release with binaries| GH
+    RELPUB -->|Publish package| NPM
+    RELPUB -->|Build & push multi-platform| DH
 ```
 
 ## Environment Variables
@@ -260,18 +309,21 @@ The pipeline uses these Makefile targets:
 
 1. **Unit Test Coverage**: Must meet or exceed 70% (baseline)
 2. **Spec Coverage**: Must be 100% (all requirement scenarios covered)
-3. **Linting**: Must pass `golangci-lint` checks
-4. **Integration Tests**: All integration tests must pass
-5. **Binary Compatibility**: Binaries must pass integration tests
-6. **Docker Image Build**: The Docker image must build and the packaged binary must start (PR check)
-7. **Docker Image Smoke Test**: The release image must start and serve the control API before it is pushed to Docker Hub
+3. **Spec Validation**: OpenAPI/AsyncAPI specs must lint clean and the generated control schema must be current
+4. **Linting**: Must pass `golangci-lint` checks
+5. **Integration Tests**: All integration tests must pass
+6. **Binary Compatibility**: Binaries must pass integration tests
+7. **Docker Image Build**: The Docker image must build and the packaged binary must start (PR check)
+8. **Docker Image Smoke Test**: The release image must start and serve the control API before it is pushed to Docker Hub
+9. **Prepare Before Publish**: npm and Docker publishing run only after every preparation job has succeeded
 
 ## Failure Handling
 
-- If unit tests or spec coverage fail, build job is skipped
-- If build fails, integration tests and docker-build are skipped
-- If integration tests fail, release is skipped
-- Release only runs on successful integration tests and tag pushes
+- If unit tests, spec coverage, or spec validation fail, the build job is skipped
+- If build fails, integration tests, docker-build, and release preparation are skipped
+- If integration tests fail, release preparation is skipped
+- If release preparation fails, the publishing job is skipped — nothing is published to npm or Docker Hub (and no GitHub release is created)
+- Release preparation and publishing only run on tag pushes
 - If the docker-build PR check fails, the Dockerfile is broken and must be fixed before merging
 
 ## Maintenance
@@ -284,9 +336,9 @@ To add support for a new platform (e.g., ARM64):
    ```yaml
    GOOS=linux GOARCH=arm64 go build -o dist/oasmock-linux-arm64 ./cmd/oasmock
    ```
-2. Update `install.js` in release job to handle new platform
+2. Update `install.js` in the release preparation job to handle new platform
 3. Update npm package.json template in project root (`os` and `cpu` fields) if needed
-4. For Docker images, add the platform to the `platforms` list of the `docker/build-push-action` step in the release job
+4. For Docker images, add the platform to the `platforms` list of the `docker/build-push-action` step in the release publishing job
 
 ### Changing Coverage Thresholds
 - Unit test coverage: Update `scripts/check-coverage.sh` call in `unit-tests` job

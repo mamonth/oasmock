@@ -138,20 +138,23 @@ func (h *signalRHub) handleStreamInvocation(sc *signalRConnection, env signalREn
 		h.writeCompletion(sc, env.InvocationID, "channel has no message examples")
 		return
 	}
-	sc.writer.write(encodeSignalRMessage(signalREnvelope{
+	// Hold the stream open and register it (RS.SHR.4, RS.SHR.21) atomically
+	// with the snapshot write: any push that observes the registration is
+	// ordered after the snapshot, and a client that has read the snapshot is
+	// guaranteed the stream is already discoverable.
+	sc.writer.writeFrameAfter(func() {
+		h.conns.mu.Lock()
+		sc.streams[env.InvocationID] = &signalRStream{
+			invocationID: env.InvocationID,
+			channelID:    channelID,
+			connID:       sc.id,
+		}
+		h.conns.mu.Unlock()
+	}, websocket.TextMessage, encodeSignalRMessage(signalREnvelope{
 		Type:         signalRTypeStreamItem,
 		InvocationID: env.InvocationID,
 		Item:         json.RawMessage(body),
 	}))
-
-	// Hold the stream open and register it (RS.SHR.4, RS.SHR.21).
-	h.conns.mu.Lock()
-	sc.streams[env.InvocationID] = &signalRStream{
-		invocationID: env.InvocationID,
-		channelID:    channelID,
-		connID:       sc.id,
-	}
-	h.conns.mu.Unlock()
 }
 
 // handleInvocation answers a one-shot Invocation by operation ID with a
