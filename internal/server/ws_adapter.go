@@ -50,8 +50,30 @@ func (w *wsWriter) writeFrame(messageType int, data []byte) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.writeFrameLocked(messageType, data)
+}
+
+// writeFrameLocked writes a frame while the caller already holds the write
+// mutex, or when the writer is nil (test doubles).
+func (w *wsWriter) writeFrameLocked(messageType int, data []byte) {
+	if w == nil || w.conn == nil || len(data) == 0 {
+		return
+	}
 	_ = w.conn.SetWriteDeadline(time.Now().Add(wsWriteDeadline))
 	_ = w.conn.WriteMessage(messageType, data)
+}
+
+// writeFrameAfter runs update while holding the connection's write mutex,
+// then writes the frame under the same lock. This makes a state change atomic
+// with the frame that announces it: a concurrent push that observes the state
+// change cannot write its own frame ahead of the announcement.
+func (w *wsWriter) writeFrameAfter(update func(), messageType int, data []byte) {
+	if w != nil {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+	}
+	update()
+	w.writeFrameLocked(messageType, data)
 }
 
 // write sends a text frame.
